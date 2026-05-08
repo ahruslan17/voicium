@@ -12,6 +12,7 @@ from pathlib import Path
 
 from voicium.audio import AudioError, StreamingRecorder
 from voicium.config import AppConfig
+from voicium.paste import PasteResult, insert_or_copy
 from voicium.transcription import TranscriptionError, TranscriptionRequest, transcribe
 
 
@@ -59,6 +60,7 @@ class DaemonResponse:
 HotkeyListener = Callable[[str], Iterator[HotkeyEvent]]
 RecorderFactory = Callable[[Path], StreamingRecorder]
 Transcriber = Callable[[TranscriptionRequest], str]
+PasteInserter = Callable[[str], PasteResult]
 
 
 def default_runtime_dir() -> Path:
@@ -80,12 +82,14 @@ class DaemonService:
         socket_path: Path | None = None,
         recorder_factory: RecorderFactory | None = None,
         transcriber: Transcriber | None = None,
+        paste_inserter: PasteInserter | None = None,
         hotkey_listener: HotkeyListener | None = None,
     ) -> None:
         self.config = config or AppConfig.default()
         self.socket_path = socket_path or default_socket_path()
         self.recorder_factory = recorder_factory or self._default_recorder_factory
         self.transcriber = transcriber or transcribe
+        self.paste_inserter = paste_inserter or self._default_paste_inserter
         self.hotkey_listener = hotkey_listener or listen_evdev_hotkey
         self.state = DaemonState.IDLE
         self.last_error: str | None = None
@@ -133,6 +137,7 @@ class DaemonService:
                     backend=self.config.transcription.backend,
                 )
             )
+            paste_result = self.paste_inserter(transcript)
         except (AudioError, TranscriptionError) as error:
             with self._lock:
                 return self._fail(str(error))
@@ -141,7 +146,8 @@ class DaemonService:
             self.state = DaemonState.IDLE
             self.last_error = None
             self.last_transcript = transcript
-            return DaemonResponse(True, self.state, "Transcription completed.", transcript)
+            message = f"Transcription completed; paste mode={paste_result.mode.value}."
+            return DaemonResponse(True, self.state, message, transcript)
 
     def status(self) -> DaemonResponse:
         with self._lock:
@@ -210,6 +216,9 @@ class DaemonService:
 
     def _default_recorder_factory(self, audio_path: Path) -> StreamingRecorder:
         return StreamingRecorder(audio_path)
+
+    def _default_paste_inserter(self, text: str) -> PasteResult:
+        return insert_or_copy(text, config=self.config.paste)
 
     def _fail(self, message: str) -> DaemonResponse:
         self.state = DaemonState.IDLE

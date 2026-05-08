@@ -26,10 +26,20 @@ class TranscriptionConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PasteConfig:
+    auto_paste: bool = True
+    restore_clipboard: bool = False
+    restore_delay_ms: int = 500
+    fallback_to_clipboard: bool = True
+    notify: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     general: GeneralConfig
     hotkey: HotkeyConfig
     transcription: TranscriptionConfig
+    paste: PasteConfig
 
     @classmethod
     def default(cls) -> AppConfig:
@@ -37,6 +47,7 @@ class AppConfig:
             general=GeneralConfig(),
             hotkey=HotkeyConfig(),
             transcription=TranscriptionConfig(),
+            paste=PasteConfig(),
         )
 
     def to_toml(self) -> str:
@@ -56,6 +67,13 @@ class AppConfig:
                 f'backend = "{self.transcription.backend}"',
                 f'model_profile = "{self.transcription.model_profile}"',
                 f"preload_model = {str(self.transcription.preload_model).lower()}",
+                "",
+                "[paste]",
+                f"auto_paste = {str(self.paste.auto_paste).lower()}",
+                f"restore_clipboard = {str(self.paste.restore_clipboard).lower()}",
+                f"restore_delay_ms = {self.paste.restore_delay_ms}",
+                f"fallback_to_clipboard = {str(self.paste.fallback_to_clipboard).lower()}",
+                f"notify = {str(self.paste.notify).lower()}",
                 "",
             ]
         )

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from voicium.audio import StreamingRecorder
 from voicium.daemon import DaemonCommand, DaemonService, DaemonState, send_command
+from voicium.paste import PasteMode, PasteResult
 from voicium.transcription import TranscriptionRequest
 
 
@@ -26,6 +27,7 @@ class FakeProcess:
 
 def test_daemon_start_stop_transcribes_and_returns_idle(tmp_path: Path) -> None:
     requests: list[TranscriptionRequest] = []
+    pasted: list[str] = []
 
     def recorder_factory(path: Path) -> StreamingRecorder:
         def process_factory(_args: list[str]) -> FakeProcess:
@@ -38,7 +40,15 @@ def test_daemon_start_stop_transcribes_and_returns_idle(tmp_path: Path) -> None:
         requests.append(request)
         return "привет"
 
-    service = DaemonService(recorder_factory=recorder_factory, transcriber=transcriber)
+    def paste_inserter(text: str) -> PasteResult:
+        pasted.append(text)
+        return PasteResult(PasteMode.PASTED, "pasted")
+
+    service = DaemonService(
+        recorder_factory=recorder_factory,
+        transcriber=transcriber,
+        paste_inserter=paste_inserter,
+    )
 
     start = service.handle_command(DaemonCommand.START_RECORDING.value)
     stop = service.handle_command(DaemonCommand.STOP_RECORDING.value)
@@ -48,7 +58,9 @@ def test_daemon_start_stop_transcribes_and_returns_idle(tmp_path: Path) -> None:
     assert stop.ok is True
     assert stop.state == DaemonState.IDLE
     assert stop.transcript == "привет"
+    assert "paste mode=pasted" in stop.message
     assert len(requests) == 1
+    assert pasted == ["привет"]
 
 
 def test_daemon_ignores_stop_without_recording() -> None:
