@@ -132,7 +132,8 @@ def download_model(
             from huggingface_hub import snapshot_download
         except ImportError as error:
             raise TranscriptionError(
-                "huggingface_hub is not installed. Run `uv sync` before downloading HF models."
+                "huggingface_hub is not installed. Run `uv sync --extra transformers` "
+                "before downloading HF models."
             ) from error
         snapshot_download(repo_id=profile.model_id, local_dir=destination)
         return destination
@@ -226,7 +227,8 @@ def transcribe_with_transformers(request: TranscriptionRequest) -> str:
         from transformers import WhisperForConditionalGeneration, WhisperProcessor, pipeline
     except ImportError as error:
         raise TranscriptionError(
-            "Transformers backend dependencies are not installed. Run `uv sync`."
+            "Transformers backend dependencies are not installed. "
+            "Run `uv sync --extra transformers`."
         ) from error
 
     local_model_path = model_path(profile.name, request.model_dir)

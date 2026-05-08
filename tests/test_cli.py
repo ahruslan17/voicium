@@ -1,5 +1,6 @@
 from voicium.cli import main
 from voicium.daemon import DaemonResponse, DaemonState
+from voicium.transcription import TranscriptionError
 
 
 def test_healthcheck_command_outputs_phase_zero_status(capsys) -> None:
@@ -29,6 +30,20 @@ def test_transcribe_command_reports_missing_file(capsys) -> None:
 
     assert exit_code == 1
     assert "Audio file not found" in captured.out
+
+
+def test_transcribe_command_defaults_to_russian_profile(capsys, monkeypatch) -> None:
+    def fake_transcribe(request) -> str:
+        raise TranscriptionError(f"profile={request.profile_name}")
+
+    monkeypatch.setattr("voicium.cli.transcribe", fake_transcribe)
+
+    exit_code = main(["transcribe", "sample.wav"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "profile=russian" in captured.out
 
 
 def test_record_command_reports_invalid_duration(capsys, tmp_path) -> None:

@@ -8,6 +8,7 @@ from voicium.healthcheck import (
     CommandResult,
     check_audio_tools,
     check_clipboard_tools,
+    check_daemon_socket,
     check_desktop,
     check_input_permissions,
     check_nvidia,
@@ -128,3 +129,11 @@ def test_input_permissions_fail_when_input_directory_is_missing(monkeypatch) -> 
     assert result.status == CheckStatus.FAIL
     assert "/dev/input does not exist" in result.message
     assert result.hint is not None
+
+
+def test_daemon_socket_hint_references_current_daemon_command(tmp_path) -> None:
+    result = check_daemon_socket({"XDG_RUNTIME_DIR": str(tmp_path)})
+
+    assert result.status == CheckStatus.WARN
+    assert result.hint is not None
+    assert "voicium daemon" in result.hint

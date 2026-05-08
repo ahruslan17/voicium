@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     transcribe_parser.add_argument("audio_path", type=Path)
     transcribe_parser.add_argument("--lang", default="ru")
-    transcribe_parser.add_argument("--profile", default="balanced")
+    transcribe_parser.add_argument("--profile", default="russian")
     transcribe_parser.add_argument("--backend", choices=("auto", "cpu", "cuda"), default="auto")
     transcribe_parser.add_argument("--model-dir", type=Path)
     transcribe_parser.add_argument("--whisper-bin", type=Path)

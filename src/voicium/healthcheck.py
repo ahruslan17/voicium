@@ -344,7 +344,7 @@ def check_daemon_socket(env: Mapping[str, str]) -> CheckResult:
         name="Daemon",
         status=CheckStatus.WARN,
         message="Daemon is not running",
-        hint="Phase 1 does not implement the daemon yet; this is expected before Phase 5.",
+        hint="Start it with `voicium daemon` or enable the systemd user service.",
     )
 
 

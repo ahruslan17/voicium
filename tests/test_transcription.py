@@ -63,6 +63,19 @@ def test_download_model_uses_huggingface_model_id(tmp_path: Path) -> None:
     assert calls == [("antony66/whisper-large-v3-russian", path)]
 
 
+def test_download_huggingface_model_mentions_optional_extra(monkeypatch, tmp_path: Path) -> None:
+    def fail_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "huggingface_hub":
+            raise ImportError("missing")
+        return original_import(name, *args, **kwargs)
+
+    original_import = __import__
+    monkeypatch.setattr("builtins.__import__", fail_import)
+
+    with pytest.raises(TranscriptionError, match="uv sync --extra transformers"):
+        download_model("russian", model_dir=tmp_path)
+
+
 def test_build_transcribe_command_rejects_huggingface_profile(tmp_path: Path) -> None:
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"wav")
