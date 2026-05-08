@@ -21,7 +21,7 @@ class HotkeyConfig:
 @dataclass(frozen=True, slots=True)
 class TranscriptionConfig:
     backend: str = "auto"
-    model_profile: str = "balanced"
+    model_profile: str = "russian"
     preload_model: bool = True
 
 

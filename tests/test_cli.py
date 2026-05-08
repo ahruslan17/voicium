@@ -19,3 +19,12 @@ def test_config_show_outputs_default_language(capsys) -> None:
     assert exit_code == 0
     assert "[general]" in captured.out
     assert 'language = "ru"' in captured.out
+
+
+def test_transcribe_command_reports_missing_file(capsys) -> None:
+    exit_code = main(["transcribe", "missing.wav"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Audio file not found" in captured.out

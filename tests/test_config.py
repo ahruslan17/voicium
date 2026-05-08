@@ -10,6 +10,7 @@ def test_default_config_is_russian_push_to_talk() -> None:
     assert config.general.mode == "push_to_talk"
     assert config.hotkey.backend == "evdev"
     assert config.transcription.backend == "auto"
+    assert config.transcription.model_profile == "russian"
 
 
 def test_default_config_path_uses_user_config_directory() -> None:
