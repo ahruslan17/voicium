@@ -1,4 +1,5 @@
 from voicium.cli import main
+from voicium.daemon import DaemonResponse, DaemonState
 
 
 def test_healthcheck_command_outputs_phase_zero_status(capsys) -> None:
@@ -57,3 +58,32 @@ def test_backend_select_reports_missing_cuda(capsys, monkeypatch) -> None:
 
     assert exit_code == 1
     assert "nvidia-smi not found" in captured.out
+
+
+def test_status_command_prints_daemon_status(capsys, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "voicium.cli.send_command",
+        lambda command: DaemonResponse(True, DaemonState.IDLE, f"handled {command}"),
+    )
+
+    exit_code = main(["status"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "State: idle" in captured.out
+    assert "handled status" in captured.out
+
+
+def test_start_command_returns_failure_when_daemon_rejects(capsys, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "voicium.cli.send_command",
+        lambda _command: DaemonResponse(False, DaemonState.PROCESSING, "busy"),
+    )
+
+    exit_code = main(["start"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "State: processing" in captured.out

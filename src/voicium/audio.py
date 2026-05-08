@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,7 @@ class AudioInputDevice:
 
 
 CommandRunner = Callable[[Sequence[str]], CommandResult]
+ProcessFactory = Callable[[Sequence[str]], subprocess.Popen[bytes]]
 
 MIN_DURATION_SECONDS = 1
 MAX_DURATION_SECONDS = 300
@@ -121,6 +123,75 @@ def record_wav(
     return output_path
 
 
+@dataclass(slots=True)
+class StreamingRecorder:
+    output_path: Path
+    device: str | None = None
+    process_factory: ProcessFactory | None = None
+    process: subprocess.Popen[bytes] | None = None
+    started_at: float | None = None
+
+    def start(self) -> None:
+        if self.process is not None:
+            raise AudioError("Recording is already active.")
+        if shutil.which("ffmpeg") is None:
+            raise AudioError("ffmpeg not found. Install ffmpeg to record microphone audio.")
+
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        factory = self.process_factory or start_process
+        self.process = factory(build_stream_record_command(self.output_path, device=self.device))
+        self.started_at = time.monotonic()
+
+    def stop(self) -> Path:
+        process = self.process
+        if process is None:
+            raise AudioError("Recording is not active.")
+
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        finally:
+            self.process = None
+
+        if not self.output_path.exists():
+            raise AudioError(f"Recording did not produce WAV file: {self.output_path}")
+        return self.output_path
+
+    def is_recording(self) -> bool:
+        return self.process is not None
+
+
+def build_stream_record_command(output_path: Path, *, device: str | None = None) -> list[str]:
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "pulse",
+    ]
+    if device is not None:
+        command.extend(["-i", device])
+    else:
+        command.extend(["-i", "default"])
+    command.extend(
+        [
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-y",
+            str(output_path),
+        ]
+    )
+    return command
+
+
 def run_command(args: Sequence[str]) -> CommandResult:
     completed = subprocess.run(
         args,
@@ -134,3 +205,7 @@ def run_command(args: Sequence[str]) -> CommandResult:
         stdout=completed.stdout.strip(),
         stderr=completed.stderr.strip(),
     )
+
+
+def start_process(args: Sequence[str]) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)

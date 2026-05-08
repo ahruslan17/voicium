@@ -9,6 +9,7 @@ from voicium import __version__
 from voicium.audio import AudioError, list_input_devices, record_wav
 from voicium.backend import BackendError, run_cuda_smoke_test, select_backend
 from voicium.config import AppConfig, default_config_path
+from voicium.daemon import DaemonCommand, DaemonError, DaemonService, send_command
 from voicium.healthcheck import has_failures, render_results
 from voicium.healthcheck import run_healthcheck as collect_healthcheck
 from voicium.transcription import (
@@ -104,6 +105,18 @@ def build_parser() -> argparse.ArgumentParser:
     backend_smoke_parser.add_argument("--whisper-bin", type=Path)
     backend_smoke_parser.set_defaults(handler=cuda_smoke_test_command)
 
+    daemon_parser = subparsers.add_parser("daemon", help="Run the Voicium daemon foreground loop.")
+    daemon_parser.set_defaults(handler=daemon_command)
+
+    start_parser = subparsers.add_parser("start", help="Tell the daemon to start recording.")
+    start_parser.set_defaults(handler=start_recording_command)
+
+    stop_parser = subparsers.add_parser("stop", help="Tell the daemon to stop recording.")
+    stop_parser.set_defaults(handler=stop_recording_command)
+
+    status_parser = subparsers.add_parser("status", help="Print daemon status.")
+    status_parser.set_defaults(handler=status_command)
+
     config_parser = subparsers.add_parser("config", help="Inspect Voicium configuration.")
     config_subparsers = config_parser.add_subparsers(dest="config_command")
     config_show_parser = config_subparsers.add_parser("show", help="Print default config values.")
@@ -196,6 +209,36 @@ def cuda_smoke_test_command(args: argparse.Namespace) -> int:
         print(f"GPU: {selection.gpu.name}")
     print("CUDA smoke-test passed")
     return 0
+
+
+def daemon_command(_args: argparse.Namespace) -> int:
+    return DaemonService().serve_forever()
+
+
+def start_recording_command(_args: argparse.Namespace) -> int:
+    return _daemon_client_command(DaemonCommand.START_RECORDING)
+
+
+def stop_recording_command(_args: argparse.Namespace) -> int:
+    return _daemon_client_command(DaemonCommand.STOP_RECORDING)
+
+
+def status_command(_args: argparse.Namespace) -> int:
+    return _daemon_client_command(DaemonCommand.STATUS)
+
+
+def _daemon_client_command(command: DaemonCommand) -> int:
+    try:
+        response = send_command(command.value)
+    except DaemonError as error:
+        print(f"error: {error}")
+        return 1
+
+    print(f"State: {response.state.value}")
+    print(f"Message: {response.message}")
+    if response.transcript is not None:
+        print(response.transcript)
+    return 0 if response.ok else 1
 
 
 def list_audio_inputs_command(_args: argparse.Namespace) -> int:
