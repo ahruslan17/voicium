@@ -1,5 +1,7 @@
 from voicium.cli import main
 from voicium.daemon import DaemonResponse, DaemonState
+from voicium.history import HistoryStore
+from voicium.paste import PasteMode, PasteResult
 from voicium.transcription import TranscriptionError
 
 
@@ -102,3 +104,35 @@ def test_start_command_returns_failure_when_daemon_rejects(capsys, monkeypatch) 
 
     assert exit_code == 1
     assert "State: processing" in captured.out
+
+
+def test_history_list_outputs_entries(capsys, monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "history.sqlite"
+    HistoryStore(db_path).add(text="привет")
+    monkeypatch.setattr("voicium.cli.HistoryStore", lambda: HistoryStore(db_path))
+
+    exit_code = main(["history", "list"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "привет" in captured.out
+
+
+def test_history_copy_copies_entry(capsys, monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "history.sqlite"
+    entry = HistoryStore(db_path).add(text="привет")
+    copied: list[str] = []
+    monkeypatch.setattr("voicium.cli.HistoryStore", lambda: HistoryStore(db_path))
+    monkeypatch.setattr(
+        "voicium.cli.insert_or_copy",
+        lambda text, config: copied.append(text) or PasteResult(PasteMode.COPIED, "copied"),
+    )
+
+    exit_code = main(["history", "copy", str(entry.id)])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert copied == ["привет"]
+    assert "History item 1" in captured.out

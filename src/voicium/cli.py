@@ -8,10 +8,12 @@ from pathlib import Path
 from voicium import __version__
 from voicium.audio import AudioError, list_input_devices, record_wav
 from voicium.backend import BackendError, run_cuda_smoke_test, select_backend
-from voicium.config import AppConfig, default_config_path
+from voicium.config import AppConfig, PasteConfig, default_config_path
 from voicium.daemon import DaemonCommand, DaemonError, DaemonService, send_command
 from voicium.healthcheck import has_failures, render_results
 from voicium.healthcheck import run_healthcheck as collect_healthcheck
+from voicium.history import HistoryError, HistoryStore, format_history_entries
+from voicium.paste import PasteMode, insert_or_copy
 from voicium.transcription import (
     TranscriptionError,
     TranscriptionRequest,
@@ -116,6 +118,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     status_parser = subparsers.add_parser("status", help="Print daemon status.")
     status_parser.set_defaults(handler=status_command)
+
+    history_parser = subparsers.add_parser("history", help="Inspect transcription history.")
+    history_subparsers = history_parser.add_subparsers(dest="history_command")
+    history_list_parser = history_subparsers.add_parser("list", help="List recent transcriptions.")
+    history_list_parser.add_argument("--limit", type=int, default=20)
+    history_list_parser.set_defaults(handler=history_list_command)
+    history_copy_parser = history_subparsers.add_parser("copy", help="Copy a history item.")
+    history_copy_parser.add_argument("id", type=int)
+    history_copy_parser.set_defaults(handler=history_copy_command)
+    history_repeat_parser = history_subparsers.add_parser(
+        "repeat",
+        help="Paste or copy a history item again.",
+    )
+    history_repeat_parser.add_argument("id", type=int)
+    history_repeat_parser.set_defaults(handler=history_repeat_command)
 
     config_parser = subparsers.add_parser("config", help="Inspect Voicium configuration.")
     config_subparsers = config_parser.add_subparsers(dest="config_command")
@@ -225,6 +242,44 @@ def stop_recording_command(_args: argparse.Namespace) -> int:
 
 def status_command(_args: argparse.Namespace) -> int:
     return _daemon_client_command(DaemonCommand.STATUS)
+
+
+def history_list_command(args: argparse.Namespace) -> int:
+    entries = HistoryStore().list(limit=args.limit)
+    if not entries:
+        print("History is empty.")
+        return 0
+    print(format_history_entries(entries))
+    return 0
+
+
+def history_copy_command(args: argparse.Namespace) -> int:
+    return _history_insert_command(args.id, auto_paste=False)
+
+
+def history_repeat_command(args: argparse.Namespace) -> int:
+    return _history_insert_command(args.id, auto_paste=True)
+
+
+def _history_insert_command(entry_id: int, *, auto_paste: bool) -> int:
+    try:
+        entry = HistoryStore().get(entry_id)
+        config = AppConfig.default().paste
+        paste_config = PasteConfig(
+            auto_paste=auto_paste,
+            restore_clipboard=config.restore_clipboard,
+            restore_delay_ms=config.restore_delay_ms,
+            fallback_to_clipboard=config.fallback_to_clipboard,
+            notify=config.notify,
+        )
+        result = insert_or_copy(entry.text, config=paste_config)
+    except HistoryError as error:
+        print(f"error: {error}")
+        return 1
+
+    print(f"History item {entry.id}: {result.mode.value}")
+    print(result.message)
+    return 0 if result.mode != PasteMode.FAILED else 1
 
 
 def _daemon_client_command(command: DaemonCommand) -> int:

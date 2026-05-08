@@ -13,6 +13,7 @@ def test_default_config_is_russian_push_to_talk() -> None:
     assert config.transcription.model_profile == "russian"
     assert config.paste.auto_paste is True
     assert config.paste.fallback_to_clipboard is True
+    assert config.russian.replacements["опенкод"] == "OpenCode"
 
 
 def test_default_config_path_uses_user_config_directory() -> None:

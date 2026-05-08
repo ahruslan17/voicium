@@ -28,6 +28,7 @@ class FakeProcess:
 def test_daemon_start_stop_transcribes_and_returns_idle(tmp_path: Path) -> None:
     requests: list[TranscriptionRequest] = []
     pasted: list[str] = []
+    history: list[tuple[str, str | None, PasteResult]] = []
 
     def recorder_factory(path: Path) -> StreamingRecorder:
         def process_factory(_args: list[str]) -> FakeProcess:
@@ -48,6 +49,7 @@ def test_daemon_start_stop_transcribes_and_returns_idle(tmp_path: Path) -> None:
         recorder_factory=recorder_factory,
         transcriber=transcriber,
         paste_inserter=paste_inserter,
+        history_writer=lambda text, raw, result: history.append((text, raw, result)),
     )
 
     start = service.handle_command(DaemonCommand.START_RECORDING.value)
@@ -61,6 +63,31 @@ def test_daemon_start_stop_transcribes_and_returns_idle(tmp_path: Path) -> None:
     assert "paste mode=pasted" in stop.message
     assert len(requests) == 1
     assert pasted == ["привет"]
+    assert history == [("привет", "привет", PasteResult(PasteMode.PASTED, "pasted"))]
+
+
+def test_daemon_postprocesses_transcript_before_paste(tmp_path: Path) -> None:
+    pasted: list[str] = []
+
+    def recorder_factory(path: Path) -> StreamingRecorder:
+        def process_factory(_args: list[str]) -> FakeProcess:
+            path.write_bytes(b"wav")
+            return FakeProcess()
+
+        return StreamingRecorder(path, process_factory=process_factory)
+
+    service = DaemonService(
+        recorder_factory=recorder_factory,
+        transcriber=lambda _request: "привет запятая опенкод",
+        paste_inserter=lambda text: pasted.append(text) or PasteResult(PasteMode.PASTED, "pasted"),
+        history_writer=lambda _text, _raw, _result: None,
+    )
+
+    service.handle_command(DaemonCommand.START_RECORDING.value)
+    response = service.handle_command(DaemonCommand.STOP_RECORDING.value)
+
+    assert response.transcript == "привет, OpenCode"
+    assert pasted == ["привет, OpenCode"]
 
 
 def test_daemon_ignores_stop_without_recording() -> None:

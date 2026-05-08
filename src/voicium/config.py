@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,12 +36,30 @@ class PasteConfig:
     notify: bool = True
 
 
+DEFAULT_REPLACEMENTS = MappingProxyType(
+    {
+        "опенкод": "OpenCode",
+        "гитлаб": "GitLab",
+        "докер": "Docker",
+        "кубернетис": "Kubernetes",
+        "пайтон": "Python",
+        "постгрес": "Postgres",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RussianConfig:
+    replacements: Mapping[str, str]
+
+
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     general: GeneralConfig
     hotkey: HotkeyConfig
     transcription: TranscriptionConfig
     paste: PasteConfig
+    russian: RussianConfig
 
     @classmethod
     def default(cls) -> AppConfig:
@@ -48,6 +68,7 @@ class AppConfig:
             hotkey=HotkeyConfig(),
             transcription=TranscriptionConfig(),
             paste=PasteConfig(),
+            russian=RussianConfig(replacements=DEFAULT_REPLACEMENTS),
         )
 
     def to_toml(self) -> str:
@@ -74,6 +95,9 @@ class AppConfig:
                 f"restore_delay_ms = {self.paste.restore_delay_ms}",
                 f"fallback_to_clipboard = {str(self.paste.fallback_to_clipboard).lower()}",
                 f"notify = {str(self.paste.notify).lower()}",
+                "",
+                "[russian.replacements]",
+                *[f'"{key}" = "{value}"' for key, value in self.russian.replacements.items()],
                 "",
             ]
         )

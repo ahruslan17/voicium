@@ -12,7 +12,9 @@ from pathlib import Path
 
 from voicium.audio import AudioError, StreamingRecorder
 from voicium.config import AppConfig
-from voicium.paste import PasteResult, insert_or_copy
+from voicium.history import HistoryStore
+from voicium.paste import PasteMode, PasteResult, insert_or_copy
+from voicium.postprocess import postprocess_russian
 from voicium.transcription import TranscriptionError, TranscriptionRequest, transcribe
 
 
@@ -61,6 +63,7 @@ HotkeyListener = Callable[[str], Iterator[HotkeyEvent]]
 RecorderFactory = Callable[[Path], StreamingRecorder]
 Transcriber = Callable[[TranscriptionRequest], str]
 PasteInserter = Callable[[str], PasteResult]
+HistoryWriter = Callable[[str, str | None, PasteResult], None]
 
 
 def default_runtime_dir() -> Path:
@@ -83,6 +86,7 @@ class DaemonService:
         recorder_factory: RecorderFactory | None = None,
         transcriber: Transcriber | None = None,
         paste_inserter: PasteInserter | None = None,
+        history_writer: HistoryWriter | None = None,
         hotkey_listener: HotkeyListener | None = None,
     ) -> None:
         self.config = config or AppConfig.default()
@@ -90,6 +94,7 @@ class DaemonService:
         self.recorder_factory = recorder_factory or self._default_recorder_factory
         self.transcriber = transcriber or transcribe
         self.paste_inserter = paste_inserter or self._default_paste_inserter
+        self.history_writer = history_writer or self._default_history_writer
         self.hotkey_listener = hotkey_listener or listen_evdev_hotkey
         self.state = DaemonState.IDLE
         self.last_error: str | None = None
@@ -129,7 +134,7 @@ class DaemonService:
 
         try:
             audio_path = recorder.stop()
-            transcript = self.transcriber(
+            raw_transcript = self.transcriber(
                 TranscriptionRequest(
                     audio_path=audio_path,
                     language=self.config.general.language,
@@ -137,7 +142,12 @@ class DaemonService:
                     backend=self.config.transcription.backend,
                 )
             )
+            transcript = postprocess_russian(
+                raw_transcript,
+                replacements=self.config.russian.replacements,
+            )
             paste_result = self.paste_inserter(transcript)
+            self.history_writer(transcript, raw_transcript, paste_result)
         except (AudioError, TranscriptionError) as error:
             with self._lock:
                 return self._fail(str(error))
@@ -219,6 +229,25 @@ class DaemonService:
 
     def _default_paste_inserter(self, text: str) -> PasteResult:
         return insert_or_copy(text, config=self.config.paste)
+
+    def _default_history_writer(
+        self,
+        text: str,
+        raw_text: str | None,
+        paste_result: PasteResult,
+    ) -> None:
+        if not self.config.general.history_enabled:
+            return
+        try:
+            HistoryStore().add(
+                text=text,
+                raw_text=raw_text,
+                model=self.config.transcription.model_profile,
+                backend=self.config.transcription.backend,
+                pasted=paste_result.mode == PasteMode.PASTED,
+            )
+        except Exception:
+            return
 
     def _fail(self, message: str) -> DaemonResponse:
         self.state = DaemonState.IDLE
