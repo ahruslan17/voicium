@@ -5,6 +5,8 @@ from collections.abc import Sequence
 
 from voicium import __version__
 from voicium.config import AppConfig, default_config_path
+from voicium.healthcheck import has_failures, render_results
+from voicium.healthcheck import run_healthcheck as collect_healthcheck
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     healthcheck_parser = subparsers.add_parser(
         "healthcheck",
-        help="Print Phase 0 environment diagnostics placeholder.",
+        help="Print Ubuntu environment diagnostics.",
     )
     healthcheck_parser.set_defaults(handler=run_healthcheck)
 
@@ -44,10 +46,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def run_healthcheck(_args: argparse.Namespace) -> int:
     config_path = default_config_path()
-    print("Voicium healthcheck")
-    print("Status: Phase 0 skeleton OK")
     print(f"Config path: {config_path}")
-    return 0
+    results = collect_healthcheck()
+    print(render_results(results))
+    return 1 if has_failures(results) else 0
 
 
 def show_config(_args: argparse.Namespace) -> int:
