@@ -7,6 +7,7 @@ from pathlib import Path
 
 from voicium import __version__
 from voicium.audio import AudioError, list_input_devices, record_wav
+from voicium.backend import BackendError, run_cuda_smoke_test, select_backend
 from voicium.config import AppConfig, default_config_path
 from voicium.healthcheck import has_failures, render_results
 from voicium.healthcheck import run_healthcheck as collect_healthcheck
@@ -40,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_parser.add_argument("audio_path", type=Path)
     transcribe_parser.add_argument("--lang", default="ru")
     transcribe_parser.add_argument("--profile", default="balanced")
-    transcribe_parser.add_argument("--backend", choices=("auto", "cpu"), default="auto")
+    transcribe_parser.add_argument("--backend", choices=("auto", "cpu", "cuda"), default="auto")
     transcribe_parser.add_argument("--model-dir", type=Path)
     transcribe_parser.add_argument("--whisper-bin", type=Path)
     transcribe_parser.set_defaults(handler=run_transcribe)
@@ -65,7 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     record_transcribe_parser.add_argument("--keep-audio", type=Path)
     record_transcribe_parser.add_argument("--lang", default="ru")
     record_transcribe_parser.add_argument("--profile", default="russian")
-    record_transcribe_parser.add_argument("--backend", choices=("auto", "cpu"), default="auto")
+    record_transcribe_parser.add_argument(
+        "--backend",
+        choices=("auto", "cpu", "cuda"),
+        default="auto",
+    )
     record_transcribe_parser.add_argument("--model-dir", type=Path)
     record_transcribe_parser.add_argument("--whisper-bin", type=Path)
     record_transcribe_parser.set_defaults(handler=record_transcribe_command)
@@ -82,6 +87,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     models_download_parser.add_argument("--model-dir", type=Path)
     models_download_parser.set_defaults(handler=download_model_command)
+
+    backend_parser = subparsers.add_parser("backend", help="Inspect transcription backends.")
+    backend_subparsers = backend_parser.add_subparsers(dest="backend_command")
+    backend_select_parser = backend_subparsers.add_parser(
+        "select",
+        help="Print selected backend for auto/cpu/cuda mode.",
+    )
+    backend_select_parser.add_argument("--backend", choices=("auto", "cpu", "cuda"), default="auto")
+    backend_select_parser.add_argument("--whisper-bin", type=Path)
+    backend_select_parser.set_defaults(handler=select_backend_command)
+    backend_smoke_parser = backend_subparsers.add_parser(
+        "cuda-smoke-test",
+        help="Check NVIDIA and CUDA whisper.cpp binary availability.",
+    )
+    backend_smoke_parser.add_argument("--whisper-bin", type=Path)
+    backend_smoke_parser.set_defaults(handler=cuda_smoke_test_command)
 
     config_parser = subparsers.add_parser("config", help="Inspect Voicium configuration.")
     config_subparsers = config_parser.add_subparsers(dest="config_command")
@@ -141,6 +162,39 @@ def download_model_command(args: argparse.Namespace) -> int:
         print(f"error: {error}")
         return 1
     print(f"Downloaded model: {path}")
+    return 0
+
+
+def select_backend_command(args: argparse.Namespace) -> int:
+    try:
+        selection = select_backend(args.backend, explicit_binary=args.whisper_bin)
+    except BackendError as error:
+        print(f"error: {error}")
+        return 1
+
+    print(f"Selected backend: {selection.backend.value}")
+    print(f"Reason: {selection.reason}")
+    if selection.binary_path is not None:
+        print(f"Binary: {selection.binary_path}")
+    if selection.gpu is not None:
+        print(f"GPU: {selection.gpu.name}")
+    return 0
+
+
+def cuda_smoke_test_command(args: argparse.Namespace) -> int:
+    try:
+        selection = run_cuda_smoke_test(binary_path=args.whisper_bin)
+    except BackendError as error:
+        print(f"error: {error}")
+        return 1
+
+    print(f"Selected backend: {selection.backend.value}")
+    print(f"Reason: {selection.reason}")
+    if selection.binary_path is not None:
+        print(f"Binary: {selection.binary_path}")
+    if selection.gpu is not None:
+        print(f"GPU: {selection.gpu.name}")
+    print("CUDA smoke-test passed")
     return 0
 
 

@@ -122,12 +122,23 @@ def test_build_transcribe_command_fails_when_model_is_missing(tmp_path: Path) ->
         )
 
 
-def test_build_transcribe_command_rejects_cuda_in_phase_two(tmp_path: Path) -> None:
+def test_build_transcribe_command_fails_clearly_when_cuda_unavailable(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda command: None)
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"wav")
+    model_path("fast", tmp_path).write_text("model", encoding="utf-8")
 
-    with pytest.raises(TranscriptionError, match="backend=auto or backend=cpu"):
-        build_transcribe_command(TranscriptionRequest(audio_path=audio_path, backend="cuda"))
+    with pytest.raises(TranscriptionError, match="nvidia-smi not found"):
+        build_transcribe_command(
+            TranscriptionRequest(
+                audio_path=audio_path,
+                profile_name="fast",
+                backend="cuda",
+                model_dir=tmp_path,
+            )
+        )
 
 
 def test_transcribe_returns_whisper_output(tmp_path: Path) -> None:

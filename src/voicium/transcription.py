@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import shutil
 import subprocess
 import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+
+from voicium.backend import BackendError, BackendName, select_backend
 
 
 class TranscriptionError(RuntimeError):
@@ -142,27 +143,7 @@ def download_model(
     return destination
 
 
-def discover_whisper_binary(explicit_binary: Path | None = None) -> Path:
-    if explicit_binary is not None:
-        if explicit_binary.exists():
-            return explicit_binary
-        raise TranscriptionError(f"whisper.cpp binary not found: {explicit_binary}")
-
-    for command in ("whisper-cli", "whisper.cpp", "main"):
-        found = shutil.which(command)
-        if found is not None:
-            return Path(found)
-
-    raise TranscriptionError(
-        "whisper.cpp binary not found. Install whisper.cpp and expose whisper-cli in PATH, "
-        "or pass --whisper-bin."
-    )
-
-
 def build_transcribe_command(request: TranscriptionRequest) -> list[str]:
-    if request.backend not in {"auto", "cpu"}:
-        raise TranscriptionError("Phase 2 supports only backend=auto or backend=cpu.")
-
     profile = get_model_profile(request.profile_name)
     if profile.source == ModelSource.HUGGINGFACE:
         raise TranscriptionError(
@@ -179,9 +160,19 @@ def build_transcribe_command(request: TranscriptionRequest) -> list[str]:
             f"Model file not found: {model}. Run `voicium models download {request.profile_name}`."
         )
 
-    whisper_binary = discover_whisper_binary(request.whisper_binary)
+    try:
+        backend_selection = select_backend(
+            request.backend,
+            explicit_binary=request.whisper_binary,
+        )
+    except BackendError as error:
+        raise TranscriptionError(str(error)) from error
+
+    if backend_selection.binary_path is None:
+        raise TranscriptionError("Selected backend has no whisper.cpp binary path.")
+
     return [
-        str(whisper_binary),
+        str(backend_selection.binary_path),
         "-m",
         str(model),
         "-f",
@@ -219,8 +210,8 @@ def transcribe(
 
 
 def transcribe_with_transformers(request: TranscriptionRequest) -> str:
-    if request.backend not in {"auto", "cpu"}:
-        raise TranscriptionError("Phase 2 supports only backend=auto or backend=cpu.")
+    if request.backend == BackendName.CUDA.value:
+        raise TranscriptionError("CUDA backend is only supported by whisper.cpp profiles.")
     if not request.audio_path.exists():
         raise TranscriptionError(f"Audio file not found: {request.audio_path}")
 

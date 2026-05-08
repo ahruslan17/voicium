@@ -46,3 +46,14 @@ def test_record_transcribe_command_reports_invalid_duration(capsys) -> None:
 
     assert exit_code == 1
     assert "Duration must be between" in captured.out
+
+
+def test_backend_select_reports_missing_cuda(capsys, monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda command: None)
+
+    exit_code = main(["backend", "select", "--backend", "cuda"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "nvidia-smi not found" in captured.out
