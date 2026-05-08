@@ -6,8 +6,12 @@ from voicium.healthcheck import (
     CheckResult,
     CheckStatus,
     CommandResult,
+    check_audio_tools,
+    check_clipboard_tools,
     check_desktop,
+    check_input_permissions,
     check_nvidia,
+    check_paste_tools,
     check_session,
     has_failures,
     render_results,
@@ -38,6 +42,16 @@ def test_nvidia_reports_driver_failure(monkeypatch) -> None:
 
     assert result.status == CheckStatus.FAIL
     assert result.message == "driver unavailable"
+
+
+def test_nvidia_reports_missing_driver_tool(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda command: None)
+
+    result = check_nvidia(lambda _args: CommandResult(returncode=0, stdout="", stderr=""))
+
+    assert result.status == CheckStatus.WARN
+    assert "nvidia-smi not found" in result.message
+    assert result.hint is not None
 
 
 def test_nvidia_reports_gpu_details(monkeypatch) -> None:
@@ -73,3 +87,44 @@ def test_has_failures_detects_fail_result() -> None:
 
     assert result.status == CheckStatus.FAIL
     assert has_failures([result]) is True
+
+
+def test_audio_tools_warn_when_common_tools_are_missing(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda command: None)
+
+    result = check_audio_tools()
+
+    assert result.status == CheckStatus.WARN
+    assert "No common audio diagnostic tools found" in result.message
+    assert result.hint is not None
+
+
+def test_wayland_clipboard_reports_missing_tools(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda command: None)
+
+    result = check_clipboard_tools({"XDG_SESSION_TYPE": "wayland"})
+
+    assert result.status == CheckStatus.WARN
+    assert "wl-copy" in result.message
+    assert "wl-paste" in result.message
+    assert result.hint is not None
+
+
+def test_wayland_paste_reports_missing_tool(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda command: None)
+
+    result = check_paste_tools({"XDG_SESSION_TYPE": "wayland"})
+
+    assert result.status == CheckStatus.WARN
+    assert "ydotool not found" in result.message
+    assert result.hint is not None
+
+
+def test_input_permissions_fail_when_input_directory_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr("pathlib.Path.exists", lambda self: False)
+
+    result = check_input_permissions()
+
+    assert result.status == CheckStatus.FAIL
+    assert "/dev/input does not exist" in result.message
+    assert result.hint is not None
