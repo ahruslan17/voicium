@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from voicium.audio import StreamingRecorder
+from voicium.config import AppConfig, save_config
 from voicium.daemon import (
     DaemonCommand,
     DaemonError,
@@ -114,6 +115,36 @@ def test_daemon_ignores_stop_without_recording() -> None:
     assert response.ok is True
     assert response.state == DaemonState.IDLE
     assert response.message == "No active recording."
+
+
+def test_daemon_updates_runtime_mode_and_hotkey(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    monkeypatch.setattr("voicium.config.default_config_path", lambda: config_path)
+    service = DaemonService(config=AppConfig.default())
+
+    mode_response = service.handle_command("set_runtime_mode:fast")
+    hotkey_response = service.handle_command("set_hotkey:KEY_F8")
+
+    assert mode_response.ok is True
+    assert hotkey_response.ok is True
+    assert service.config.transcription.model_profile == "fast"
+    assert service.config.hotkey.key == "KEY_F8"
+    assert config_path.exists()
+
+
+def test_daemon_reloads_config(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    monkeypatch.setattr("voicium.config.default_config_path", lambda: config_path)
+    save_config(
+        AppConfig.default().with_hotkey("KEY_F8").with_runtime_mode("balanced"), config_path
+    )
+    service = DaemonService(config=AppConfig.default())
+
+    response = service.handle_command(DaemonCommand.RELOAD_CONFIG.value)
+
+    assert response.ok is True
+    assert service.config.hotkey.key == "KEY_F8"
+    assert service.config.transcription.model_profile == "balanced"
 
 
 def test_daemon_returns_error_when_paste_fails(tmp_path: Path) -> None:

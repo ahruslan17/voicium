@@ -8,7 +8,7 @@ from pathlib import Path
 from voicium import __version__
 from voicium.audio import AudioError, list_input_devices, record_wav
 from voicium.backend import BackendError, run_cuda_smoke_test, select_backend
-from voicium.config import AppConfig, PasteConfig, default_config_path
+from voicium.config import AppConfig, PasteConfig, default_config_path, load_config
 from voicium.daemon import DaemonCommand, DaemonError, DaemonService, send_command
 from voicium.healthcheck import has_failures, render_results
 from voicium.healthcheck import run_healthcheck as collect_healthcheck
@@ -119,6 +119,9 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser("status", help="Print daemon status.")
     status_parser.set_defaults(handler=status_command)
 
+    reload_parser = subparsers.add_parser("reload", help="Reload daemon configuration.")
+    reload_parser.set_defaults(handler=reload_command)
+
     history_parser = subparsers.add_parser("history", help="Inspect transcription history.")
     history_subparsers = history_parser.add_subparsers(dest="history_command")
     history_list_parser = history_subparsers.add_parser("list", help="List recent transcriptions.")
@@ -163,7 +166,7 @@ def run_healthcheck(_args: argparse.Namespace) -> int:
 
 
 def show_config(_args: argparse.Namespace) -> int:
-    config = AppConfig.default()
+    config = load_config()
     print(config.to_toml())
     return 0
 
@@ -229,7 +232,7 @@ def cuda_smoke_test_command(args: argparse.Namespace) -> int:
 
 
 def daemon_command(_args: argparse.Namespace) -> int:
-    return DaemonService().serve_forever()
+    return DaemonService(config=load_config()).serve_forever()
 
 
 def start_recording_command(_args: argparse.Namespace) -> int:
@@ -242,6 +245,10 @@ def stop_recording_command(_args: argparse.Namespace) -> int:
 
 def status_command(_args: argparse.Namespace) -> int:
     return _daemon_client_command(DaemonCommand.STATUS, timeout=2.0)
+
+
+def reload_command(_args: argparse.Namespace) -> int:
+    return _daemon_client_command(DaemonCommand.RELOAD_CONFIG, timeout=2.0)
 
 
 def history_list_command(args: argparse.Namespace) -> int:

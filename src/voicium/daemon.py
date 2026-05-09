@@ -15,7 +15,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from voicium.audio import AudioError, StreamingRecorder
-from voicium.config import AppConfig
+from voicium.config import AppConfig, RuntimeMode, load_config, save_config
 from voicium.history import HistoryStore
 from voicium.paste import PasteMode, PasteResult, insert_or_copy, start_detached_command
 from voicium.postprocess import postprocess_russian
@@ -37,6 +37,7 @@ class DaemonCommand(StrEnum):
     START_RECORDING = "start_recording"
     STOP_RECORDING = "stop_recording"
     STATUS = "status"
+    RELOAD_CONFIG = "reload_config"
     SHUTDOWN = "shutdown"
 
 
@@ -197,10 +198,52 @@ class DaemonService:
                 return self.stop_recording()
             case DaemonCommand.STATUS:
                 return self.status()
+            case DaemonCommand.RELOAD_CONFIG:
+                return self.reload_config()
             case DaemonCommand.SHUTDOWN:
                 return self.shutdown()
+            case command if command.startswith("set_runtime_mode:"):
+                return self.set_runtime_mode(command.partition(":")[2])
+            case command if command.startswith("set_hotkey:"):
+                return self.set_hotkey(command.partition(":")[2])
             case _:
                 return DaemonResponse(False, self.state, f"Unknown command: {command}")
+
+    def reload_config(self) -> DaemonResponse:
+        with self._lock:
+            self.config = load_config()
+            message = (
+                "Config reloaded. "
+                f"hotkey={self.config.hotkey.key}, "
+                f"runtime_mode={self.config.transcription.runtime_mode}. "
+                "Restart daemon to apply hotkey listener changes."
+            )
+            self._notify_tray(DaemonState.IDLE, message)
+            return DaemonResponse(True, self.state, message)
+
+    def set_runtime_mode(self, runtime_mode: str) -> DaemonResponse:
+        try:
+            RuntimeMode(runtime_mode)
+        except ValueError:
+            return DaemonResponse(False, self.state, f"Unknown runtime mode: {runtime_mode}")
+
+        with self._lock:
+            self.config = self.config.with_runtime_mode(runtime_mode)
+            save_config(self.config)
+            message = f"Runtime mode set to {runtime_mode}."
+            self._notify_tray(DaemonState.IDLE, message)
+            return DaemonResponse(True, self.state, message)
+
+    def set_hotkey(self, key: str) -> DaemonResponse:
+        if not key.startswith("KEY_"):
+            return DaemonResponse(False, self.state, f"Invalid evdev key code: {key}")
+
+        with self._lock:
+            self.config = self.config.with_hotkey(key)
+            save_config(self.config)
+            message = f"Hotkey set to {key}. Restart daemon to apply listener changes."
+            self._notify_tray(DaemonState.IDLE, message)
+            return DaemonResponse(True, self.state, message)
 
     def serve_forever(self) -> int:
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -392,8 +435,50 @@ def _build_status_icon_menu(gtk: object) -> object:
     status_item = gtk.MenuItem(label="Voicium is running")
     status_item.set_sensitive(False)
     menu.append(status_item)
+    menu.append(gtk.SeparatorMenuItem())
+    _append_hotkey_menu(gtk, menu)
+    _append_runtime_mode_menu(gtk, menu)
     menu.show_all()
     return menu
+
+
+def _append_hotkey_menu(gtk: object, menu: object) -> None:
+    submenu = gtk.Menu()
+    for key in ("KEY_RIGHTCTRL", "KEY_LEFTCTRL", "KEY_F8", "KEY_PAUSE", "KEY_RIGHTALT"):
+        item = gtk.MenuItem(label=key)
+        item.connect(
+            "activate", lambda _item, selected=key: _send_tray_command(f"set_hotkey:{selected}")
+        )
+        submenu.append(item)
+    parent = gtk.MenuItem(label="Hotkey")
+    parent.set_submenu(submenu)
+    menu.append(parent)
+
+
+def _append_runtime_mode_menu(gtk: object, menu: object) -> None:
+    submenu = gtk.Menu()
+    labels = {
+        RuntimeMode.QUALITY.value: "Quality - Transformers",
+        RuntimeMode.FAST.value: "Fast - whisper.cpp small",
+        RuntimeMode.BALANCED.value: "Balanced - whisper.cpp medium",
+    }
+    for runtime_mode, label in labels.items():
+        item = gtk.MenuItem(label=label)
+        item.connect(
+            "activate",
+            lambda _item, selected=runtime_mode: _send_tray_command(f"set_runtime_mode:{selected}"),
+        )
+        submenu.append(item)
+    parent = gtk.MenuItem(label="Transcription Mode")
+    parent.set_submenu(submenu)
+    menu.append(parent)
+
+
+def _send_tray_command(command: str) -> None:
+    try:
+        send_command(command, timeout=2.0)
+    except DaemonError as error:
+        show_transcript_notification(str(error))
 
 
 def _watch_tray_events(

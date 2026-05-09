@@ -99,6 +99,24 @@ def test_status_command_prints_daemon_status(capsys, monkeypatch) -> None:
     assert calls == [("status", 2.0)]
 
 
+def test_reload_command_sends_reload_config(capsys, monkeypatch) -> None:
+    calls: list[tuple[str, float]] = []
+
+    def fake_send_command(command: str, *, timeout: float) -> DaemonResponse:
+        calls.append((command, timeout))
+        return DaemonResponse(True, DaemonState.IDLE, "reloaded")
+
+    monkeypatch.setattr("voicium.cli.send_command", fake_send_command)
+
+    exit_code = main(["reload"])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "reloaded" in captured.out
+    assert calls == [("reload_config", 2.0)]
+
+
 def test_start_command_returns_failure_when_daemon_rejects(capsys, monkeypatch) -> None:
     monkeypatch.setattr(
         "voicium.cli.send_command",
