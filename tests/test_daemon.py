@@ -7,6 +7,7 @@ import time
 import types
 import warnings
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -115,6 +116,13 @@ def test_daemon_ignores_stop_without_recording() -> None:
     assert response.ok is True
     assert response.state == DaemonState.IDLE
     assert response.message == "No active recording."
+
+
+def test_daemon_status_includes_hotkey_and_runtime_mode() -> None:
+    response = DaemonService(config=AppConfig.default()).status()
+
+    assert "hotkey=KEY_RIGHTCTRL" in response.message
+    assert "runtime_mode=quality" in response.message
 
 
 def test_daemon_updates_runtime_mode_and_hotkey(tmp_path: Path, monkeypatch) -> None:
@@ -246,7 +254,7 @@ def test_evdev_listener_reads_from_all_matching_keyboards(monkeypatch) -> None:
         type = 1
 
     class FakeKeyEvent:
-        keycode = "KEY_RIGHTCTRL"
+        keycode: ClassVar[list[str]] = ["KEY_RIGHTCTRL", "BTN_EXTRA"]
         keystate = 1
         key_hold = 2
         key_down = 1
@@ -260,8 +268,9 @@ def test_evdev_listener_reads_from_all_matching_keyboards(monkeypatch) -> None:
         ) -> dict[tuple[str, int], list[tuple[str, int]]]:
             return {("EV_KEY", 1): [("KEY_RIGHTCTRL", 97)]}
 
-        def read(self) -> list[FakeEvent]:
-            return [FakeEvent()] if self.path == "/dev/input/event2" else []
+        def read_loop(self):
+            if self.path == "/dev/input/event2":
+                yield FakeEvent()
 
     fake_evdev = types.SimpleNamespace(
         InputDevice=FakeDevice,
@@ -270,14 +279,6 @@ def test_evdev_listener_reads_from_all_matching_keyboards(monkeypatch) -> None:
         categorize=lambda _event: FakeKeyEvent(),
     )
     monkeypatch.setitem(sys.modules, "evdev", fake_evdev)
-    monkeypatch.setattr(
-        "select.select",
-        lambda devices, _write, _error: (
-            [device for device in devices if device.path == "/dev/input/event2"],
-            [],
-            [],
-        ),
-    )
 
     event = next(listen_evdev_hotkey("KEY_RIGHTCTRL"))
 

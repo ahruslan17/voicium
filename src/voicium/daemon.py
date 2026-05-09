@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import select
 import shutil
 import socket
 import tempfile
@@ -180,7 +179,11 @@ class DaemonService:
 
     def status(self) -> DaemonResponse:
         with self._lock:
-            message = "Daemon is running."
+            message = (
+                "Daemon is running. "
+                f"hotkey={self.config.hotkey.key}, "
+                f"runtime_mode={self.config.transcription.runtime_mode}."
+            )
             if self.last_error is not None:
                 message = self.last_error
             return DaemonResponse(True, self.state, message, self.last_transcript)
@@ -387,16 +390,44 @@ def listen_evdev_hotkey(key_code: str) -> Iterator[HotkeyEvent]:
     if not keyboards:
         raise DaemonError(f"No readable input device supports {key_code}.")
 
+    events: queue.Queue[HotkeyEvent] = queue.Queue()
+    for device in keyboards:
+        threading.Thread(
+            target=_read_evdev_device,
+            args=(device, key_code, events, evdev),
+            daemon=True,
+        ).start()
+
     while True:
-        readable, _, _ = select.select(keyboards, [], [])
-        for device in readable:
-            for event in device.read():
-                if event.type != evdev.ecodes.EV_KEY:
-                    continue
-                key_event = evdev.categorize(event)
-                if key_event.keycode != key_code or key_event.keystate == key_event.key_hold:
-                    continue
-                yield HotkeyEvent(pressed=key_event.keystate == key_event.key_down)
+        yield events.get()
+
+
+def _read_evdev_device(
+    device: object,
+    key_code: str,
+    events: queue.Queue[HotkeyEvent],
+    evdev_module: object,
+) -> None:
+    try:
+        for event in device.read_loop():  # type: ignore[attr-defined]
+            if event.type != evdev_module.ecodes.EV_KEY:  # type: ignore[attr-defined]
+                continue
+            key_event = evdev_module.categorize(event)  # type: ignore[attr-defined]
+            if not _keycode_matches(key_event.keycode, key_code):
+                continue
+            if key_event.keystate == key_event.key_hold:
+                continue
+            events.put(HotkeyEvent(pressed=key_event.keystate == key_event.key_down))
+    except OSError:
+        return
+
+
+def _keycode_matches(actual: object, expected: str) -> bool:
+    if isinstance(actual, str):
+        return actual == expected
+    if isinstance(actual, (list, tuple, set)):
+        return expected in actual
+    return False
 
 
 def start_status_icon(events: queue.Queue[TrayEvent]) -> None:

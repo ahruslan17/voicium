@@ -12,7 +12,9 @@ license = { text = "MIT" }
 authors = [
   { name = "Ruslan" },
 ]
-dependencies = []
+dependencies = [
+  "evdev>=1.7.0",
+]
 
 [project.optional-dependencies]
 transformers = [
