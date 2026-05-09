@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import select
+import shutil
 import socket
 import tempfile
 import threading
@@ -14,7 +17,7 @@ from pathlib import Path
 from voicium.audio import AudioError, StreamingRecorder
 from voicium.config import AppConfig
 from voicium.history import HistoryStore
-from voicium.paste import PasteMode, PasteResult, insert_or_copy
+from voicium.paste import PasteMode, PasteResult, insert_or_copy, start_detached_command
 from voicium.postprocess import postprocess_russian
 from voicium.transcription import TranscriptionError, TranscriptionRequest, transcribe
 
@@ -60,12 +63,19 @@ class DaemonResponse:
         return data
 
 
+@dataclass(frozen=True, slots=True)
+class TrayEvent:
+    state: DaemonState
+    message: str
+    transcript: str | None = None
+
+
 HotkeyListener = Callable[[str], Iterator[HotkeyEvent]]
 RecorderFactory = Callable[[Path], StreamingRecorder]
 Transcriber = Callable[[TranscriptionRequest], str]
 PasteInserter = Callable[[str], PasteResult]
 HistoryWriter = Callable[[str, str | None, PasteResult], None]
-TrayStarter = Callable[[], object]
+TrayStarter = Callable[[queue.Queue[TrayEvent]], object]
 
 
 def default_runtime_dir() -> Path:
@@ -103,6 +113,7 @@ class DaemonService:
         self.state = DaemonState.IDLE
         self.last_error: str | None = None
         self.last_transcript: str | None = None
+        self._tray_events: queue.Queue[TrayEvent] = queue.Queue()
         self._recorder: StreamingRecorder | None = None
         self._stop_requested = threading.Event()
         self._lock = threading.Lock()
@@ -125,6 +136,7 @@ class DaemonService:
 
             self.state = DaemonState.RECORDING
             self.last_error = None
+            self._notify_tray(DaemonState.RECORDING, "Recording started.")
             return DaemonResponse(True, self.state, "Recording started.")
 
     def stop_recording(self) -> DaemonResponse:
@@ -135,6 +147,7 @@ class DaemonService:
             recorder = self._recorder
             self._recorder = None
             self.state = DaemonState.PROCESSING
+            self._notify_tray(DaemonState.PROCESSING, "Transcribing audio.")
 
         try:
             audio_path = recorder.stop()
@@ -161,6 +174,7 @@ class DaemonService:
             self.last_error = None
             self.last_transcript = transcript
             message = f"Transcription completed; paste mode={paste_result.mode.value}."
+            self._notify_tray(DaemonState.IDLE, message, transcript)
             return DaemonResponse(True, self.state, message, transcript)
 
     def status(self) -> DaemonResponse:
@@ -172,6 +186,7 @@ class DaemonService:
 
     def shutdown(self) -> DaemonResponse:
         self._stop_requested.set()
+        self._notify_tray(DaemonState.IDLE, "Shutdown requested.")
         return DaemonResponse(True, self.state, "Shutdown requested.")
 
     def handle_command(self, command: str) -> DaemonResponse:
@@ -232,7 +247,7 @@ class DaemonService:
 
     def _run_status_icon(self) -> None:
         try:
-            self.tray_starter()
+            self.tray_starter(self._tray_events)
         except DaemonError as error:
             warnings.warn(str(error), RuntimeWarning, stacklevel=2)
 
@@ -271,7 +286,16 @@ class DaemonService:
     def _fail(self, message: str) -> DaemonResponse:
         self.state = DaemonState.IDLE
         self.last_error = message
+        self._notify_tray(DaemonState.IDLE, message)
         return DaemonResponse(False, self.state, message)
+
+    def _notify_tray(
+        self,
+        state: DaemonState,
+        message: str,
+        transcript: str | None = None,
+    ) -> None:
+        self._tray_events.put(TrayEvent(state=state, message=message, transcript=transcript))
 
 
 def send_command(
@@ -320,17 +344,19 @@ def listen_evdev_hotkey(key_code: str) -> Iterator[HotkeyEvent]:
     if not keyboards:
         raise DaemonError(f"No readable input device supports {key_code}.")
 
-    for device in keyboards:
-        for event in device.read_loop():
-            if event.type != evdev.ecodes.EV_KEY:
-                continue
-            key_event = evdev.categorize(event)
-            if key_event.keycode != key_code or key_event.keystate == key_event.key_hold:
-                continue
-            yield HotkeyEvent(pressed=key_event.keystate == key_event.key_down)
+    while True:
+        readable, _, _ = select.select(keyboards, [], [])
+        for device in readable:
+            for event in device.read():
+                if event.type != evdev.ecodes.EV_KEY:
+                    continue
+                key_event = evdev.categorize(event)
+                if key_event.keycode != key_code or key_event.keystate == key_event.key_hold:
+                    continue
+                yield HotkeyEvent(pressed=key_event.keystate == key_event.key_down)
 
 
-def start_status_icon() -> None:
+def start_status_icon(events: queue.Queue[TrayEvent]) -> None:
     try:
         import gi
 
@@ -341,7 +367,7 @@ def start_status_icon() -> None:
         except (ImportError, ValueError):
             gi.require_version("AppIndicator3", "0.1")
             from gi.repository import AppIndicator3 as AppIndicator
-        from gi.repository import Gtk
+        from gi.repository import GLib, Gtk
     except (ImportError, ValueError) as error:
         raise DaemonError(
             "Status icon backend is unavailable. Install gir1.2-ayatanaappindicator3-0.1 "
@@ -354,8 +380,10 @@ def start_status_icon() -> None:
         AppIndicator.IndicatorCategory.APPLICATION_STATUS,
     )
     indicator.set_title("Voicium")
+    indicator.set_attention_icon_full("media-record-symbolic", "Voicium recording")
     indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
     indicator.set_menu(_build_status_icon_menu(Gtk))
+    _watch_tray_events(events, indicator, AppIndicator, GLib)
     Gtk.main()
 
 
@@ -366,6 +394,50 @@ def _build_status_icon_menu(gtk: object) -> object:
     menu.append(status_item)
     menu.show_all()
     return menu
+
+
+def _watch_tray_events(
+    events: queue.Queue[TrayEvent],
+    indicator: object,
+    app_indicator: object,
+    glib: object,
+) -> None:
+    def poll() -> bool:
+        while True:
+            try:
+                event = events.get_nowait()
+            except queue.Empty:
+                return True
+            _apply_tray_event(event, indicator, app_indicator)
+
+    glib.timeout_add(200, poll)
+
+
+def _apply_tray_event(
+    event: TrayEvent,
+    indicator: object,
+    app_indicator: object,
+) -> None:
+    if event.state == DaemonState.RECORDING:
+        indicator.set_icon_full("media-record-symbolic", "Voicium recording")
+        indicator.set_status(app_indicator.IndicatorStatus.ATTENTION)
+        return
+
+    if event.state == DaemonState.PROCESSING:
+        indicator.set_icon_full("audio-input-microphone-symbolic", "Voicium transcribing")
+        indicator.set_status(app_indicator.IndicatorStatus.ACTIVE)
+        return
+
+    indicator.set_icon_full("audio-input-microphone-symbolic", "Voicium")
+    indicator.set_status(app_indicator.IndicatorStatus.ACTIVE)
+    if event.transcript:
+        show_transcript_notification(event.transcript)
+
+
+def show_transcript_notification(text: str) -> None:
+    if shutil.which("notify-send") is None:
+        return
+    start_detached_command(["notify-send", "Voicium transcription", text])
 
 
 def _device_supports_key(device: object, key_code: str) -> bool:

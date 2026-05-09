@@ -8,11 +8,17 @@ from voicium.transcription import (
     TranscriptionError,
     TranscriptionRequest,
     build_transcribe_command,
+    clear_transformers_pipeline_cache,
     download_model,
     get_model_profile,
+    get_transformers_pipeline,
     model_path,
     transcribe,
 )
+
+
+def teardown_function() -> None:
+    clear_transformers_pipeline_cache()
 
 
 def test_model_profiles_include_phase_two_profiles() -> None:
@@ -197,3 +203,51 @@ def test_transcribe_reports_whisper_failure(tmp_path: Path) -> None:
             ),
             command_runner=runner,
         )
+
+
+def test_transformers_pipeline_is_cached(monkeypatch, tmp_path: Path) -> None:
+    calls: list[Path | str] = []
+
+    class FakeModel:
+        @classmethod
+        def from_pretrained(cls, model_reference, **_kwargs: object) -> "FakeModel":
+            calls.append(model_reference)
+            return cls()
+
+        def eval(self) -> "FakeModel":
+            return self
+
+    class FakeProcessor:
+        tokenizer = object()
+        feature_extractor = object()
+
+        @classmethod
+        def from_pretrained(cls, _model_reference, **_kwargs: object) -> "FakeProcessor":
+            return cls()
+
+    def fake_pipeline(*_args: object, **_kwargs: object):
+        return lambda *_call_args, **_call_kwargs: {"text": "привет"}
+
+    def fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "torch":
+            return type("Torch", (), {"float32": object()})
+        if name == "transformers":
+            return type(
+                "Transformers",
+                (),
+                {
+                    "WhisperForConditionalGeneration": FakeModel,
+                    "WhisperProcessor": FakeProcessor,
+                    "pipeline": fake_pipeline,
+                },
+            )
+        return original_import(name, *args, **kwargs)
+
+    original_import = __import__
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    first = get_transformers_pipeline(model_reference="model", cache_dir=tmp_path)
+    second = get_transformers_pipeline(model_reference="model", cache_dir=tmp_path)
+
+    assert first is second
+    assert calls == ["model"]

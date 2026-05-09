@@ -48,6 +48,9 @@ class CommandResult:
 
 CommandRunner = Callable[[Sequence[str]], CommandResult]
 DownloadRunner = Callable[[str, Path], object]
+TransformersPipeline = Callable[..., dict[str, object]]
+
+_TRANSFORMERS_PIPELINES: dict[tuple[str, str | None], TransformersPipeline] = {}
 
 
 MODEL_PROFILES: dict[str, ModelProfile] = {
@@ -222,6 +225,34 @@ def transcribe_with_transformers(request: TranscriptionRequest) -> str:
             f"Model profile '{request.profile_name}' has no HuggingFace model id."
         )
 
+    local_model_path = model_path(profile.name, request.model_dir)
+    model_reference = local_model_path if local_model_path.exists() else profile.model_id
+    asr_pipeline = get_transformers_pipeline(
+        model_reference=model_reference,
+        cache_dir=request.model_dir or default_model_dir(),
+    )
+    result = asr_pipeline(
+        str(request.audio_path),
+        generate_kwargs={
+            "language": "russian" if request.language == "ru" else request.language,
+            "temperature": 0.0,
+        },
+        return_timestamps=False,
+    )
+    text = str(result.get("text", "")).strip()
+    if not text:
+        raise TranscriptionError("Transcription produced empty output.")
+    return text
+
+
+def get_transformers_pipeline(
+    *, model_reference: str | Path, cache_dir: Path
+) -> TransformersPipeline:
+    cache_key = (str(model_reference), str(cache_dir))
+    cached = _TRANSFORMERS_PIPELINES.get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         import torch
         from transformers import WhisperForConditionalGeneration, WhisperProcessor, pipeline
@@ -231,18 +262,16 @@ def transcribe_with_transformers(request: TranscriptionRequest) -> str:
             "Run `uv sync --extra transformers`."
         ) from error
 
-    local_model_path = model_path(profile.name, request.model_dir)
-    model_reference = local_model_path if local_model_path.exists() else profile.model_id
     model = WhisperForConditionalGeneration.from_pretrained(
         model_reference,
         torch_dtype=torch.float32,
         low_cpu_mem_usage=True,
         use_safetensors=True,
-        cache_dir=request.model_dir or default_model_dir(),
+        cache_dir=cache_dir,
     ).eval()
     processor = WhisperProcessor.from_pretrained(
         model_reference,
-        cache_dir=request.model_dir or default_model_dir(),
+        cache_dir=cache_dir,
     )
     asr_pipeline = pipeline(
         "automatic-speech-recognition",
@@ -250,27 +279,16 @@ def transcribe_with_transformers(request: TranscriptionRequest) -> str:
         tokenizer=processor.tokenizer,
         feature_extractor=processor.feature_extractor,
         max_new_tokens=256,
-        chunk_length_s=30,
         batch_size=1,
         return_timestamps=False,
+        ignore_warning=True,
     )
-    result = asr_pipeline(
-        str(request.audio_path),
-        generate_kwargs={
-            "language": "russian" if request.language == "ru" else request.language,
-            "max_new_tokens": 256,
-            "num_beams": 1,
-            "temperature": 0.0,
-            "use_cache": True,
-        },
-        return_timestamps=False,
-        chunk_length_s=30,
-        batch_size=1,
-    )
-    text = str(result.get("text", "")).strip()
-    if not text:
-        raise TranscriptionError("Transcription produced empty output.")
-    return text
+    _TRANSFORMERS_PIPELINES[cache_key] = asr_pipeline
+    return asr_pipeline
+
+
+def clear_transformers_pipeline_cache() -> None:
+    _TRANSFORMERS_PIPELINES.clear()
 
 
 def run_command(args: Sequence[str]) -> CommandResult:

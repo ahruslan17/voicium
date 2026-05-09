@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 import time
+import types
 import warnings
 from pathlib import Path
 
@@ -14,7 +16,11 @@ from voicium.daemon import (
     DaemonError,
     DaemonService,
     DaemonState,
+    TrayEvent,
+    _apply_tray_event,
+    listen_evdev_hotkey,
     send_command,
+    show_transcript_notification,
 )
 from voicium.paste import PasteMode, PasteResult
 from voicium.transcription import TranscriptionRequest
@@ -139,7 +145,7 @@ def test_daemon_socket_status(tmp_path: Path) -> None:
     service = DaemonService(
         socket_path=socket_path,
         hotkey_listener=lambda _key: iter(()),
-        tray_starter=lambda: tray_started.append(True),
+        tray_starter=lambda _events: tray_started.append(True),
     )
     thread = threading.Thread(target=service.serve_forever)
     thread.start()
@@ -167,7 +173,7 @@ def test_daemon_ignores_missing_status_icon_backend(tmp_path: Path) -> None:
     service = DaemonService(
         socket_path=socket_path,
         hotkey_listener=lambda _key: iter(()),
-        tray_starter=fail_tray,
+        tray_starter=lambda _events: fail_tray(),
     )
     thread = threading.Thread(target=service.serve_forever)
     thread.start()
@@ -202,6 +208,121 @@ def test_send_command_wraps_timeout(tmp_path: Path) -> None:
             send_command(DaemonCommand.STATUS.value, socket_path=socket_path, timeout=0.01)
 
         thread.join(timeout=1)
+
+
+def test_evdev_listener_reads_from_all_matching_keyboards(monkeypatch) -> None:
+    class FakeEvent:
+        type = 1
+
+    class FakeKeyEvent:
+        keycode = "KEY_RIGHTCTRL"
+        keystate = 1
+        key_hold = 2
+        key_down = 1
+
+    class FakeDevice:
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+        def capabilities(
+            self, verbose: bool = False
+        ) -> dict[tuple[str, int], list[tuple[str, int]]]:
+            return {("EV_KEY", 1): [("KEY_RIGHTCTRL", 97)]}
+
+        def read(self) -> list[FakeEvent]:
+            return [FakeEvent()] if self.path == "/dev/input/event2" else []
+
+    fake_evdev = types.SimpleNamespace(
+        InputDevice=FakeDevice,
+        list_devices=lambda: ["/dev/input/event1", "/dev/input/event2"],
+        ecodes=types.SimpleNamespace(EV_KEY=1),
+        categorize=lambda _event: FakeKeyEvent(),
+    )
+    monkeypatch.setitem(sys.modules, "evdev", fake_evdev)
+    monkeypatch.setattr(
+        "select.select",
+        lambda devices, _write, _error: (
+            [device for device in devices if device.path == "/dev/input/event2"],
+            [],
+            [],
+        ),
+    )
+
+    event = next(listen_evdev_hotkey("KEY_RIGHTCTRL"))
+
+    assert event.pressed is True
+
+
+def test_daemon_emits_tray_events_for_recording_and_completion(tmp_path: Path) -> None:
+    def recorder_factory(path: Path) -> StreamingRecorder:
+        def process_factory(_args: list[str]) -> FakeProcess:
+            path.write_bytes(b"wav")
+            return FakeProcess()
+
+        return StreamingRecorder(path, process_factory=process_factory)
+
+    service = DaemonService(
+        recorder_factory=recorder_factory,
+        transcriber=lambda _request: "привет",
+        paste_inserter=lambda _text: PasteResult(PasteMode.PASTED, "pasted"),
+        history_writer=lambda _text, _raw, _result: None,
+        tray_starter=lambda _events: None,
+    )
+
+    service.handle_command(DaemonCommand.START_RECORDING.value)
+    service.handle_command(DaemonCommand.STOP_RECORDING.value)
+
+    events = [service._tray_events.get_nowait() for _ in range(3)]
+    assert [event.state for event in events] == [
+        DaemonState.RECORDING,
+        DaemonState.PROCESSING,
+        DaemonState.IDLE,
+    ]
+    assert events[-1].transcript == "привет"
+
+
+def test_apply_tray_event_switches_indicator_attention(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeIndicator:
+        def set_icon_full(self, icon: str, description: str) -> None:
+            calls.append(("icon", icon))
+
+        def set_status(self, status: object) -> None:
+            calls.append(("status", status))
+
+    class FakeAppIndicator:
+        class IndicatorStatus:
+            ACTIVE = "active"
+            ATTENTION = "attention"
+
+    notified: list[str] = []
+    monkeypatch.setattr("voicium.daemon.show_transcript_notification", notified.append)
+
+    _apply_tray_event(
+        TrayEvent(DaemonState.RECORDING, "recording"),
+        FakeIndicator(),
+        FakeAppIndicator,
+    )
+    _apply_tray_event(
+        TrayEvent(DaemonState.IDLE, "done", "готово"),
+        FakeIndicator(),
+        FakeAppIndicator,
+    )
+
+    assert ("status", "attention") in calls
+    assert ("status", "active") in calls
+    assert notified == ["готово"]
+
+
+def test_show_transcript_notification_is_best_effort(monkeypatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr("shutil.which", lambda _command: "/usr/bin/notify-send")
+    monkeypatch.setattr("voicium.daemon.start_detached_command", lambda args: calls.append(args))
+
+    show_transcript_notification("готово")
+
+    assert calls == [["notify-send", "Voicium transcription", "готово"]]
 
 
 def _wait_for_socket(socket_path: Path) -> None:

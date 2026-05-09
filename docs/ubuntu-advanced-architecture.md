@@ -182,6 +182,9 @@ src/voicium/
     clipboard.py
     wayland.py
     x11.py
+  tray/
+    indicator.py
+    settings_menu.py
   enhancement/
     openai_compatible.py
     prompts.py
@@ -949,6 +952,34 @@ Acceptance:
 - API failure still inserts local transcription;
 - API key is not required for default local mode.
 
+### Phase 8.5: Tray Settings and Runtime Modes
+
+Goal: make core runtime settings discoverable from the daemon status icon.
+
+Tasks:
+
+- implement AppIndicator menu opened from the daemon icon;
+- add menu item for hotkey settings;
+- add menu item for transcription mode settings;
+- persist selected settings to `~/.config/voicium/config.toml`;
+- add config reload path from tray settings to daemon runtime;
+- implement hotkey rebinding without daemon restart where possible;
+- implement transcription runtime mode selection:
+  - `quality`: Transformers Russian model, best quality, slower startup/inference;
+  - `fast`: `whisper.cpp` `fast` profile, lower latency, lower quality;
+  - `balanced`: `whisper.cpp` `balanced` profile, medium latency/quality;
+- ensure model download errors for selected mode are actionable;
+- add tests for config persistence, mode selection, and daemon reload behavior.
+
+Acceptance:
+
+- clicking the daemon icon opens a menu;
+- menu exposes Hotkey and Transcription Mode entries;
+- user can choose between Transformers quality mode and whisper.cpp fast/balanced modes;
+- changed hotkey is used for the next push-to-talk attempt;
+- changed transcription mode affects the next transcription without losing clipboard fallback;
+- healthcheck reports missing tools/models for the selected mode.
+
 ### Phase 9: Packaging and Release Candidate
 
 Goal: installable MVP.
@@ -960,6 +991,7 @@ Tasks:
 - add model download docs;
 - add GPU troubleshooting docs;
 - add Wayland troubleshooting docs;
+- document tray settings, hotkey setup, and transcription mode tradeoffs;
 - add release checklist.
 
 Acceptance:

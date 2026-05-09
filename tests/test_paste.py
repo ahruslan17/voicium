@@ -4,7 +4,15 @@ import subprocess
 from collections.abc import Sequence
 
 from voicium.config import PasteConfig
-from voicium.paste import CommandResult, PasteManager, PasteMode, run_command, select_paste_backend
+from voicium.paste import (
+    CommandResult,
+    PasteManager,
+    PasteMode,
+    PasteResult,
+    notify_paste_result,
+    run_command,
+    select_paste_backend,
+)
 
 
 def test_selects_wayland_backend_when_tools_exist() -> None:
@@ -112,3 +120,15 @@ def test_run_command_starts_xclip_owner(monkeypatch) -> None:
 
     assert result.returncode == 0
     assert writes == ["привет", "closed"]
+
+
+def test_notify_paste_result_is_detached_by_default(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr("shutil.which", lambda _command: "/usr/bin/notify-send")
+    monkeypatch.setattr(
+        "voicium.paste.start_detached_command", lambda args: calls.append(tuple(args))
+    )
+
+    notify_paste_result(PasteResult(PasteMode.COPIED, "copied"))
+
+    assert calls == [("notify-send", "Voicium", "copied")]

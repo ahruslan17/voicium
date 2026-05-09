@@ -366,6 +366,7 @@ min_recording_ms = 300
 [transcription]
 backend = "auto"
 model_profile = "balanced"
+runtime_mode = "balanced"
 threads = "auto"
 preload_model = true
 
@@ -510,6 +511,36 @@ Default selection:
 - if CUDA available: `balanced` or `accurate` depending on VRAM;
 - if CPU only: `fast` or `balanced` depending on benchmark;
 - language always `ru` for MVP.
+
+### 13.2.1 User-facing transcription modes
+
+The tray settings menu must expose user-facing runtime modes instead of raw implementation details:
+
+```text
+quality:
+  backend: Transformers
+  profile: russian
+  tradeoff: best Russian quality, slowest startup/inference
+
+fast:
+  backend: whisper.cpp
+  profile: fast
+  tradeoff: lowest latency, lower quality
+
+balanced:
+  backend: whisper.cpp
+  profile: balanced
+  tradeoff: medium latency/quality
+```
+
+Rules:
+
+- `quality` uses the HuggingFace Russian model and should cache/preload the pipeline in daemon;
+- `fast` and `balanced` use `whisper.cpp` and must work without Transformers dependencies;
+- selected mode must be persisted in config;
+- daemon must apply the selected mode to the next transcription;
+- if the selected mode is unavailable, errors must explain which model/tool is missing and how to install it;
+- healthcheck must report readiness for the currently selected mode.
 
 ### 13.3 Whisper flags
 
@@ -958,6 +989,28 @@ Acceptance:
 - enhancement works when enabled and configured;
 - failed API does not block local transcription insertion.
 
+### M7.5: Tray Settings and Runtime Modes
+
+Deliverables:
+
+- daemon status icon menu;
+- hotkey settings entry;
+- transcription mode settings entry;
+- config persistence for selected hotkey and transcription mode;
+- runtime mode implementation for:
+  - Transformers quality mode;
+  - whisper.cpp fast mode;
+  - whisper.cpp balanced mode;
+- daemon config reload/apply path.
+
+Acceptance:
+
+- clicking the daemon icon opens a menu;
+- user can change hotkey from the menu;
+- user can switch between quality/fast/balanced transcription modes from the menu;
+- next dictation uses the selected hotkey and selected transcription mode;
+- missing dependencies/models produce actionable diagnostics.
+
 ### M8: Release Packaging
 
 Deliverables:
@@ -965,6 +1018,7 @@ Deliverables:
 - `.deb` package;
 - install docs;
 - troubleshooting docs;
+- tray settings and transcription mode docs;
 - GitLab artifacts;
 - basic release checklist.
 

@@ -157,6 +157,9 @@ def notify_paste_result(
     finder = tool_finder or shutil.which
     if finder("notify-send") is None:
         return
+    if command_runner is None:
+        start_detached_command(("notify-send", "Voicium", result.message))
+        return
     runner = command_runner or run_command
     runner(("notify-send", "Voicium", result.message), None)
 
@@ -210,3 +213,19 @@ def start_xclip_owner(text: str) -> CommandResult:
     if returncode != 0:
         return CommandResult(returncode=returncode, stdout="", stderr=stderr)
     return CommandResult(returncode=0, stdout="", stderr="")
+
+
+def start_detached_command(args: Sequence[str]) -> None:
+    process = subprocess.Popen(
+        args,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    def wait_for_process() -> None:
+        process.wait()
+
+    import threading
+
+    threading.Thread(target=wait_for_process, daemon=True).start()
