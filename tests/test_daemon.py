@@ -2,10 +2,20 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
+import warnings
 from pathlib import Path
 
+import pytest
+
 from voicium.audio import StreamingRecorder
-from voicium.daemon import DaemonCommand, DaemonService, DaemonState, send_command
+from voicium.daemon import (
+    DaemonCommand,
+    DaemonError,
+    DaemonService,
+    DaemonState,
+    send_command,
+)
 from voicium.paste import PasteMode, PasteResult
 from voicium.transcription import TranscriptionRequest
 
@@ -100,9 +110,37 @@ def test_daemon_ignores_stop_without_recording() -> None:
     assert response.message == "No active recording."
 
 
+def test_daemon_returns_error_when_paste_fails(tmp_path: Path) -> None:
+    def recorder_factory(path: Path) -> StreamingRecorder:
+        def process_factory(_args: list[str]) -> FakeProcess:
+            path.write_bytes(b"wav")
+            return FakeProcess()
+
+        return StreamingRecorder(path, process_factory=process_factory)
+
+    service = DaemonService(
+        recorder_factory=recorder_factory,
+        transcriber=lambda _request: "привет",
+        paste_inserter=lambda _text: (_ for _ in ()).throw(RuntimeError("paste failed")),
+        history_writer=lambda _text, _raw, _result: None,
+    )
+
+    service.handle_command(DaemonCommand.START_RECORDING.value)
+    response = service.handle_command(DaemonCommand.STOP_RECORDING.value)
+
+    assert response.ok is False
+    assert response.state == DaemonState.IDLE
+    assert response.message == "paste failed"
+
+
 def test_daemon_socket_status(tmp_path: Path) -> None:
     socket_path = tmp_path / "daemon.sock"
-    service = DaemonService(socket_path=socket_path, hotkey_listener=lambda _key: iter(()))
+    tray_started: list[bool] = []
+    service = DaemonService(
+        socket_path=socket_path,
+        hotkey_listener=lambda _key: iter(()),
+        tray_starter=lambda: tray_started.append(True),
+    )
     thread = threading.Thread(target=service.serve_forever)
     thread.start()
     _wait_for_socket(socket_path)
@@ -115,6 +153,55 @@ def test_daemon_socket_status(tmp_path: Path) -> None:
     assert response.state == DaemonState.IDLE
     assert shutdown.ok is True
     assert thread.is_alive() is False
+    assert tray_started == [True]
+
+
+def test_daemon_ignores_missing_status_icon_backend(tmp_path: Path) -> None:
+    socket_path = tmp_path / "daemon.sock"
+
+    def fail_tray() -> None:
+        raise DaemonError("missing tray backend")
+
+    warnings.filterwarnings("ignore", message="missing tray backend", category=RuntimeWarning)
+
+    service = DaemonService(
+        socket_path=socket_path,
+        hotkey_listener=lambda _key: iter(()),
+        tray_starter=fail_tray,
+    )
+    thread = threading.Thread(target=service.serve_forever)
+    thread.start()
+    _wait_for_socket(socket_path)
+
+    response = send_command(DaemonCommand.STATUS.value, socket_path=socket_path)
+    shutdown = send_command(DaemonCommand.SHUTDOWN.value, socket_path=socket_path)
+    thread.join(timeout=2)
+
+    assert response.ok is True
+    assert shutdown.ok is True
+    assert thread.is_alive() is False
+
+
+def test_send_command_wraps_timeout(tmp_path: Path) -> None:
+    socket_path = tmp_path / "daemon.sock"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(socket_path))
+        server.listen(1)
+        server.settimeout(1)
+
+        def accept_without_response() -> None:
+            connection, _ = server.accept()
+            with connection:
+                connection.recv(4096)
+                time.sleep(0.1)
+
+        thread = threading.Thread(target=accept_without_response)
+        thread.start()
+
+        with pytest.raises(DaemonError, match="Daemon did not respond"):
+            send_command(DaemonCommand.STATUS.value, socket_path=socket_path, timeout=0.01)
+
+        thread.join(timeout=1)
 
 
 def _wait_for_socket(socket_path: Path) -> None:

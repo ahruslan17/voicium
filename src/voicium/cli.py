@@ -233,15 +233,15 @@ def daemon_command(_args: argparse.Namespace) -> int:
 
 
 def start_recording_command(_args: argparse.Namespace) -> int:
-    return _daemon_client_command(DaemonCommand.START_RECORDING)
+    return _daemon_client_command(DaemonCommand.START_RECORDING, timeout=2.0)
 
 
 def stop_recording_command(_args: argparse.Namespace) -> int:
-    return _daemon_client_command(DaemonCommand.STOP_RECORDING)
+    return _daemon_client_command(DaemonCommand.STOP_RECORDING, timeout=300.0)
 
 
 def status_command(_args: argparse.Namespace) -> int:
-    return _daemon_client_command(DaemonCommand.STATUS)
+    return _daemon_client_command(DaemonCommand.STATUS, timeout=2.0)
 
 
 def history_list_command(args: argparse.Namespace) -> int:
@@ -282,9 +282,9 @@ def _history_insert_command(entry_id: int, *, auto_paste: bool) -> int:
     return 0 if result.mode != PasteMode.FAILED else 1
 
 
-def _daemon_client_command(command: DaemonCommand) -> int:
+def _daemon_client_command(command: DaemonCommand, *, timeout: float) -> int:
     try:
-        response = send_command(command.value)
+        response = send_command(command.value, timeout=timeout)
     except DaemonError as error:
         print(f"error: {error}")
         return 1

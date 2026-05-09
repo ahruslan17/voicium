@@ -78,9 +78,15 @@ def test_backend_select_reports_missing_cuda(capsys, monkeypatch) -> None:
 
 
 def test_status_command_prints_daemon_status(capsys, monkeypatch) -> None:
+    calls: list[tuple[str, float]] = []
+
+    def fake_send_command(command: str, *, timeout: float) -> DaemonResponse:
+        calls.append((command, timeout))
+        return DaemonResponse(True, DaemonState.IDLE, f"handled {command}")
+
     monkeypatch.setattr(
         "voicium.cli.send_command",
-        lambda command: DaemonResponse(True, DaemonState.IDLE, f"handled {command}"),
+        fake_send_command,
     )
 
     exit_code = main(["status"])
@@ -90,12 +96,13 @@ def test_status_command_prints_daemon_status(capsys, monkeypatch) -> None:
     assert exit_code == 0
     assert "State: idle" in captured.out
     assert "handled status" in captured.out
+    assert calls == [("status", 2.0)]
 
 
 def test_start_command_returns_failure_when_daemon_rejects(capsys, monkeypatch) -> None:
     monkeypatch.setattr(
         "voicium.cli.send_command",
-        lambda _command: DaemonResponse(False, DaemonState.PROCESSING, "busy"),
+        lambda _command, *, timeout: DaemonResponse(False, DaemonState.PROCESSING, "busy"),
     )
 
     exit_code = main(["start"])
@@ -104,6 +111,21 @@ def test_start_command_returns_failure_when_daemon_rejects(capsys, monkeypatch) 
 
     assert exit_code == 1
     assert "State: processing" in captured.out
+
+
+def test_stop_command_uses_long_timeout(capsys, monkeypatch) -> None:
+    calls: list[tuple[str, float]] = []
+
+    def fake_send_command(command: str, *, timeout: float) -> DaemonResponse:
+        calls.append((command, timeout))
+        return DaemonResponse(True, DaemonState.IDLE, "stopped")
+
+    monkeypatch.setattr("voicium.cli.send_command", fake_send_command)
+
+    exit_code = main(["stop"])
+
+    assert exit_code == 0
+    assert calls == [("stop_recording", 300.0)]
 
 
 def test_history_list_outputs_entries(capsys, monkeypatch, tmp_path) -> None:

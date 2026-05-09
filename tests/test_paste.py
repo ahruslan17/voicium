@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Sequence
 
 from voicium.config import PasteConfig
-from voicium.paste import CommandResult, PasteManager, PasteMode, select_paste_backend
+from voicium.paste import CommandResult, PasteManager, PasteMode, run_command, select_paste_backend
 
 
 def test_selects_wayland_backend_when_tools_exist() -> None:
@@ -68,3 +69,46 @@ def test_auto_paste_disabled_copies_only() -> None:
 
     assert result.mode == PasteMode.COPIED
     assert calls == [(("wl-copy",), "привет")]
+
+
+def test_run_command_converts_timeout_to_result(monkeypatch) -> None:
+    def timeout_run(*_args: object, **_kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(("xclip",), timeout=5)
+
+    monkeypatch.setattr("subprocess.run", timeout_run)
+
+    result = run_command(("wl-copy",), "привет")
+
+    assert result.returncode == 124
+    assert "timed out" in result.stderr
+
+
+def test_run_command_starts_xclip_owner(monkeypatch) -> None:
+    writes: list[str] = []
+
+    class FakePipe:
+        def write(self, text: str) -> None:
+            writes.append(text)
+
+        def close(self) -> None:
+            writes.append("closed")
+
+        def read(self) -> str:
+            return ""
+
+    class FakeProcess:
+        stdin = FakePipe()
+        stderr = FakePipe()
+
+        def wait(self, timeout: float | None = None) -> int:
+            raise subprocess.TimeoutExpired(("xclip",), timeout=timeout)
+
+    def fake_popen(*_args: object, **_kwargs: object) -> FakeProcess:
+        return FakeProcess()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    result = run_command(("xclip", "-selection", "clipboard"), "привет")
+
+    assert result.returncode == 0
+    assert writes == ["привет", "closed"]

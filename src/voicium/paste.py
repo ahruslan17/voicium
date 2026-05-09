@@ -162,16 +162,51 @@ def notify_paste_result(
 
 
 def run_command(args: Sequence[str], input_text: str | None) -> CommandResult:
-    completed = subprocess.run(
-        args,
-        capture_output=True,
-        check=False,
-        input=input_text,
-        text=True,
-        timeout=5,
-    )
+    if input_text is not None and tuple(args) == ("xclip", "-selection", "clipboard"):
+        return start_xclip_owner(input_text)
+
+    try:
+        completed = subprocess.run(
+            args,
+            capture_output=True,
+            check=False,
+            input=input_text,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired as error:
+        return CommandResult(
+            returncode=124,
+            stdout=(error.stdout or "").strip() if isinstance(error.stdout, str) else "",
+            stderr=f"Command timed out after {error.timeout:g} seconds: {' '.join(args)}",
+        )
     return CommandResult(
         returncode=completed.returncode,
         stdout=completed.stdout.strip(),
         stderr=completed.stderr.strip(),
     )
+
+
+def start_xclip_owner(text: str) -> CommandResult:
+    process = subprocess.Popen(
+        ["xclip", "-selection", "clipboard"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    assert process.stdin is not None
+    assert process.stderr is not None
+    process.stdin.write(text)
+    process.stdin.close()
+
+    try:
+        returncode = process.wait(timeout=0.1)
+    except subprocess.TimeoutExpired:
+        return CommandResult(returncode=0, stdout="", stderr="")
+
+    stderr = process.stderr.read().strip()
+    if returncode != 0:
+        return CommandResult(returncode=returncode, stdout="", stderr=stderr)
+    return CommandResult(returncode=0, stdout="", stderr="")

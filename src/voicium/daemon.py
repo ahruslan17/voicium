@@ -5,6 +5,7 @@ import os
 import socket
 import tempfile
 import threading
+import warnings
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
@@ -64,6 +65,7 @@ RecorderFactory = Callable[[Path], StreamingRecorder]
 Transcriber = Callable[[TranscriptionRequest], str]
 PasteInserter = Callable[[str], PasteResult]
 HistoryWriter = Callable[[str, str | None, PasteResult], None]
+TrayStarter = Callable[[], object]
 
 
 def default_runtime_dir() -> Path:
@@ -88,6 +90,7 @@ class DaemonService:
         paste_inserter: PasteInserter | None = None,
         history_writer: HistoryWriter | None = None,
         hotkey_listener: HotkeyListener | None = None,
+        tray_starter: TrayStarter | None = None,
     ) -> None:
         self.config = config or AppConfig.default()
         self.socket_path = socket_path or default_socket_path()
@@ -96,6 +99,7 @@ class DaemonService:
         self.paste_inserter = paste_inserter or self._default_paste_inserter
         self.history_writer = history_writer or self._default_history_writer
         self.hotkey_listener = hotkey_listener or listen_evdev_hotkey
+        self.tray_starter = tray_starter or start_status_icon
         self.state = DaemonState.IDLE
         self.last_error: str | None = None
         self.last_transcript: str | None = None
@@ -148,7 +152,7 @@ class DaemonService:
             )
             paste_result = self.paste_inserter(transcript)
             self.history_writer(transcript, raw_transcript, paste_result)
-        except (AudioError, TranscriptionError) as error:
+        except (AudioError, TranscriptionError, OSError, RuntimeError) as error:
             with self._lock:
                 return self._fail(str(error))
 
@@ -190,6 +194,8 @@ class DaemonService:
 
         listener_thread = threading.Thread(target=self._run_hotkey_listener, daemon=True)
         listener_thread.start()
+        tray_thread = threading.Thread(target=self._run_status_icon, daemon=True)
+        tray_thread.start()
 
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
             server.bind(str(self.socket_path))
@@ -202,7 +208,7 @@ class DaemonService:
                 except TimeoutError:
                     continue
                 with connection:
-                    response = self.handle_command(_read_command(connection))
+                    response = self._handle_socket_command(connection)
                     try:
                         connection.sendall(json.dumps(response.to_dict()).encode() + b"\n")
                     except BrokenPipeError:
@@ -223,6 +229,19 @@ class DaemonService:
         except DaemonError as error:
             with self._lock:
                 self._fail(str(error))
+
+    def _run_status_icon(self) -> None:
+        try:
+            self.tray_starter()
+        except DaemonError as error:
+            warnings.warn(str(error), RuntimeWarning, stacklevel=2)
+
+    def _handle_socket_command(self, connection: socket.socket) -> DaemonResponse:
+        try:
+            return self.handle_command(_read_command(connection))
+        except Exception as error:
+            with self._lock:
+                return self._fail(str(error))
 
     def _default_recorder_factory(self, audio_path: Path) -> StreamingRecorder:
         return StreamingRecorder(audio_path)
@@ -267,9 +286,15 @@ def send_command(
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout)
-        client.connect(str(path))
-        client.sendall(command.encode() + b"\n")
-        payload = client.recv(64 * 1024)
+        try:
+            client.connect(str(path))
+            client.sendall(command.encode() + b"\n")
+            payload = client.recv(64 * 1024)
+        except TimeoutError as error:
+            raise DaemonError(
+                f"Daemon did not respond within {timeout:g} seconds. "
+                "The request may still be processing."
+            ) from error
 
     if not payload:
         raise DaemonError("Daemon returned empty response.")
@@ -303,6 +328,44 @@ def listen_evdev_hotkey(key_code: str) -> Iterator[HotkeyEvent]:
             if key_event.keycode != key_code or key_event.keystate == key_event.key_hold:
                 continue
             yield HotkeyEvent(pressed=key_event.keystate == key_event.key_down)
+
+
+def start_status_icon() -> None:
+    try:
+        import gi
+
+        gi.require_version("Gtk", "3.0")
+        try:
+            gi.require_version("AyatanaAppIndicator3", "0.1")
+            from gi.repository import AyatanaAppIndicator3 as AppIndicator
+        except (ImportError, ValueError):
+            gi.require_version("AppIndicator3", "0.1")
+            from gi.repository import AppIndicator3 as AppIndicator
+        from gi.repository import Gtk
+    except (ImportError, ValueError) as error:
+        raise DaemonError(
+            "Status icon backend is unavailable. Install gir1.2-ayatanaappindicator3-0.1 "
+            "and python3-gi to show Voicium in the top bar."
+        ) from error
+
+    indicator = AppIndicator.Indicator.new(
+        "voicium",
+        "audio-input-microphone-symbolic",
+        AppIndicator.IndicatorCategory.APPLICATION_STATUS,
+    )
+    indicator.set_title("Voicium")
+    indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
+    indicator.set_menu(_build_status_icon_menu(Gtk))
+    Gtk.main()
+
+
+def _build_status_icon_menu(gtk: object) -> object:
+    menu = gtk.Menu()
+    status_item = gtk.MenuItem(label="Voicium is running")
+    status_item.set_sensitive(False)
+    menu.append(status_item)
+    menu.show_all()
+    return menu
 
 
 def _device_supports_key(device: object, key_code: str) -> bool:
