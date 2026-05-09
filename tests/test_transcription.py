@@ -10,9 +10,12 @@ from voicium.transcription import (
     build_transcribe_command,
     clear_transformers_pipeline_cache,
     download_model,
+    ensure_model_available,
     get_model_profile,
     get_transformers_pipeline,
+    is_cuda_out_of_memory,
     model_path,
+    resolve_transformers_device,
     transcribe,
 )
 
@@ -126,19 +129,48 @@ def test_build_transcribe_command_adds_russian_cpu_flags(tmp_path: Path) -> None
     ]
 
 
-def test_build_transcribe_command_fails_when_model_is_missing(tmp_path: Path) -> None:
+def test_ensure_model_available_downloads_missing_whisper_cpp_model(
+    monkeypatch, tmp_path: Path
+) -> None:
+    downloaded: list[tuple[str, Path | None]] = []
+
+    def fake_download(profile_name: str, *, model_dir: Path | None = None):
+        downloaded.append((profile_name, model_dir))
+        path = model_path(profile_name, model_dir)
+        path.write_text("model", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr("voicium.transcription.download_model", fake_download)
+
+    path = ensure_model_available("fast", tmp_path)
+
+    assert path == tmp_path / "ggml-small-q5_1.bin"
+    assert downloaded == [("fast", tmp_path)]
+
+
+def test_build_transcribe_command_downloads_missing_model(monkeypatch, tmp_path: Path) -> None:
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"wav")
+    binary_path = tmp_path / "whisper-cli"
+    binary_path.write_text("binary", encoding="utf-8")
 
-    with pytest.raises(TranscriptionError, match="voicium models download fast"):
-        build_transcribe_command(
-            TranscriptionRequest(
-                audio_path=audio_path,
-                profile_name="fast",
-                model_dir=tmp_path,
-                whisper_binary=tmp_path / "whisper-cli",
-            )
+    def fake_download(profile_name: str, *, model_dir: Path | None = None):
+        path = model_path(profile_name, model_dir)
+        path.write_text("model", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr("voicium.transcription.download_model", fake_download)
+
+    command = build_transcribe_command(
+        TranscriptionRequest(
+            audio_path=audio_path,
+            profile_name="fast",
+            model_dir=tmp_path,
+            whisper_binary=binary_path,
         )
+    )
+
+    assert str(tmp_path / "ggml-small-q5_1.bin") in command
 
 
 def test_build_transcribe_command_fails_clearly_when_cuda_unavailable(
@@ -230,7 +262,19 @@ def test_transformers_pipeline_is_cached(monkeypatch, tmp_path: Path) -> None:
 
     def fake_import(name: str, *args: object, **kwargs: object) -> object:
         if name == "torch":
-            return type("Torch", (), {"float32": object()})
+            return type(
+                "Torch",
+                (),
+                {
+                    "float16": object(),
+                    "float32": object(),
+                    "cuda": type(
+                        "Cuda",
+                        (),
+                        {"is_available": lambda: False, "empty_cache": lambda: None},
+                    ),
+                },
+            )
         if name == "transformers":
             return type(
                 "Transformers",
@@ -248,6 +292,24 @@ def test_transformers_pipeline_is_cached(monkeypatch, tmp_path: Path) -> None:
 
     first = get_transformers_pipeline(model_reference="model", cache_dir=tmp_path)
     second = get_transformers_pipeline(model_reference="model", cache_dir=tmp_path)
+    cuda = get_transformers_pipeline(model_reference="model", cache_dir=tmp_path, device="cuda:0")
 
     assert first is second
-    assert calls == ["model"]
+    assert cuda is not first
+    assert calls == ["model", "model"]
+
+
+def test_resolve_transformers_device_uses_cuda_when_available() -> None:
+    torch_module = type(
+        "Torch",
+        (),
+        {"cuda": type("Cuda", (), {"is_available": lambda: True})},
+    )
+
+    assert resolve_transformers_device("auto", torch_module) == "cuda"
+    assert resolve_transformers_device("cpu", torch_module) == "cpu"
+
+
+def test_cuda_oom_detection() -> None:
+    assert is_cuda_out_of_memory(RuntimeError("CUDA out of memory")) is True
+    assert is_cuda_out_of_memory(RuntimeError("other error")) is False

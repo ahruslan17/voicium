@@ -50,7 +50,8 @@ CommandRunner = Callable[[Sequence[str]], CommandResult]
 DownloadRunner = Callable[[str, Path], object]
 TransformersPipeline = Callable[..., dict[str, object]]
 
-_TRANSFORMERS_PIPELINES: dict[tuple[str, str | None], TransformersPipeline] = {}
+_TRANSFORMERS_PIPELINES: dict[tuple[str, str, str], TransformersPipeline] = {}
+TRANSFORMERS_DEVICE = "auto"
 
 
 MODEL_PROFILES: dict[str, ModelProfile] = {
@@ -158,11 +159,7 @@ def build_transcribe_command(request: TranscriptionRequest) -> list[str]:
     if not request.audio_path.exists():
         raise TranscriptionError(f"Audio file not found: {request.audio_path}")
 
-    model = model_path(request.profile_name, request.model_dir)
-    if not model.exists():
-        raise TranscriptionError(
-            f"Model file not found: {model}. Run `voicium models download {request.profile_name}`."
-        )
+    model = ensure_model_available(request.profile_name, request.model_dir)
 
     try:
         backend_selection = select_backend(
@@ -213,6 +210,16 @@ def transcribe(
     return text
 
 
+def ensure_model_available(profile_name: str, model_dir: Path | None = None) -> Path:
+    profile = get_model_profile(profile_name)
+    path = model_path(profile.name, model_dir)
+    if path.exists():
+        return path
+    if profile.source == ModelSource.HUGGINGFACE:
+        return path
+    return download_model(profile.name, model_dir=model_dir)
+
+
 def transcribe_with_transformers(request: TranscriptionRequest) -> str:
     if request.backend == BackendName.CUDA.value:
         raise TranscriptionError("CUDA backend is only supported by whisper.cpp profiles.")
@@ -227,18 +234,25 @@ def transcribe_with_transformers(request: TranscriptionRequest) -> str:
 
     local_model_path = model_path(profile.name, request.model_dir)
     model_reference = local_model_path if local_model_path.exists() else profile.model_id
-    asr_pipeline = get_transformers_pipeline(
-        model_reference=model_reference,
-        cache_dir=request.model_dir or default_model_dir(),
-    )
-    result = asr_pipeline(
-        str(request.audio_path),
-        generate_kwargs={
-            "language": "russian" if request.language == "ru" else request.language,
-            "temperature": 0.0,
-        },
-        return_timestamps=False,
-    )
+    cache_dir = request.model_dir or default_model_dir()
+    try:
+        asr_pipeline = get_transformers_pipeline(
+            model_reference=model_reference,
+            cache_dir=cache_dir,
+            device=TRANSFORMERS_DEVICE,
+        )
+        result = run_transformers_pipeline(asr_pipeline, request)
+    except RuntimeError as error:
+        if not is_cuda_out_of_memory(error):
+            raise
+        clear_cuda_cache()
+        clear_transformers_pipeline_cache()
+        asr_pipeline = get_transformers_pipeline(
+            model_reference=model_reference,
+            cache_dir=cache_dir,
+            device="cpu",
+        )
+        result = run_transformers_pipeline(asr_pipeline, request)
     text = str(result.get("text", "")).strip()
     if not text:
         raise TranscriptionError("Transcription produced empty output.")
@@ -246,9 +260,9 @@ def transcribe_with_transformers(request: TranscriptionRequest) -> str:
 
 
 def get_transformers_pipeline(
-    *, model_reference: str | Path, cache_dir: Path
+    *, model_reference: str | Path, cache_dir: Path, device: str = TRANSFORMERS_DEVICE
 ) -> TransformersPipeline:
-    cache_key = (str(model_reference), str(cache_dir))
+    cache_key = (str(model_reference), str(cache_dir), device)
     cached = _TRANSFORMERS_PIPELINES.get(cache_key)
     if cached is not None:
         return cached
@@ -262,11 +276,16 @@ def get_transformers_pipeline(
             "Run `uv sync --extra transformers`."
         ) from error
 
+    resolved_device = resolve_transformers_device(device, torch)
+    if resolved_device == "cuda":
+        torch.cuda.empty_cache()
+
     model = WhisperForConditionalGeneration.from_pretrained(
         model_reference,
-        torch_dtype=torch.float32,
+        torch_dtype=torch.float16 if resolved_device == "cuda" else torch.float32,
         low_cpu_mem_usage=True,
         use_safetensors=True,
+        device_map="auto" if resolved_device == "cuda" else None,
         cache_dir=cache_dir,
     ).eval()
     processor = WhisperProcessor.from_pretrained(
@@ -278,7 +297,9 @@ def get_transformers_pipeline(
         model=model,
         tokenizer=processor.tokenizer,
         feature_extractor=processor.feature_extractor,
+        device=-1 if resolved_device == "cpu" else None,
         max_new_tokens=256,
+        chunk_length_s=30,
         batch_size=1,
         return_timestamps=False,
         ignore_warning=True,
@@ -289,6 +310,48 @@ def get_transformers_pipeline(
 
 def clear_transformers_pipeline_cache() -> None:
     _TRANSFORMERS_PIPELINES.clear()
+
+
+def run_transformers_pipeline(
+    asr_pipeline: TransformersPipeline,
+    request: TranscriptionRequest,
+) -> dict[str, object]:
+    return asr_pipeline(
+        str(request.audio_path),
+        generate_kwargs={
+            "language": "russian" if request.language == "ru" else request.language,
+            "max_new_tokens": 256,
+            "num_beams": 1,
+            "temperature": 0.0,
+            "use_cache": True,
+        },
+        return_timestamps=False,
+        chunk_length_s=30,
+        batch_size=1,
+    )
+
+
+def resolve_transformers_device(device: str, torch_module: object) -> str:
+    if device != "auto":
+        return device
+    cuda = getattr(torch_module, "cuda", None)
+    if cuda is not None and cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def is_cuda_out_of_memory(error: RuntimeError) -> bool:
+    message = str(error).lower()
+    return "cuda" in message and "out of memory" in message
+
+
+def clear_cuda_cache() -> None:
+    try:
+        import torch
+    except ImportError:
+        return
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def run_command(args: Sequence[str]) -> CommandResult:

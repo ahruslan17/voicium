@@ -7,6 +7,7 @@ import shutil
 import socket
 import tempfile
 import threading
+import time
 import warnings
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from pathlib import Path
 from voicium.audio import AudioError, StreamingRecorder
 from voicium.config import AppConfig, RuntimeMode, load_config, save_config
 from voicium.history import HistoryStore
-from voicium.paste import PasteMode, PasteResult, insert_or_copy, start_detached_command
+from voicium.paste import PasteMode, PasteResult, copy_to_clipboard, start_detached_command
 from voicium.postprocess import postprocess_russian
 from voicium.transcription import TranscriptionError, TranscriptionRequest, transcribe
 
@@ -119,6 +120,7 @@ class DaemonService:
         self._lock = threading.Lock()
 
     def start_recording(self) -> DaemonResponse:
+        started_at = time.perf_counter()
         with self._lock:
             if self.state == DaemonState.RECORDING:
                 return DaemonResponse(True, self.state, "Recording already active.")
@@ -137,9 +139,11 @@ class DaemonService:
             self.state = DaemonState.RECORDING
             self.last_error = None
             self._notify_tray(DaemonState.RECORDING, "Recording started.")
+            log_timing("start_recording", started_at)
             return DaemonResponse(True, self.state, "Recording started.")
 
     def stop_recording(self) -> DaemonResponse:
+        started_at = time.perf_counter()
         with self._lock:
             if self.state != DaemonState.RECORDING or self._recorder is None:
                 return DaemonResponse(True, self.state, "No active recording.")
@@ -150,24 +154,37 @@ class DaemonService:
             self._notify_tray(DaemonState.PROCESSING, "Transcribing audio.")
 
         try:
+            stop_started_at = time.perf_counter()
             audio_path = recorder.stop()
-            raw_transcript = self.transcriber(
-                TranscriptionRequest(
-                    audio_path=audio_path,
-                    language=self.config.general.language,
-                    profile_name=self.config.transcription.model_profile,
-                    backend=self.config.transcription.backend,
-                )
-            )
+            log_timing("stop_recording.audio_stop", stop_started_at)
+        except AudioError as error:
+            with self._lock:
+                return self._fail(str(error))
+
+        threading.Thread(target=self._process_recording, args=(audio_path,), daemon=True).start()
+        log_timing("stop_recording.return", started_at)
+        return DaemonResponse(True, self.state, "Recording stopped; transcription started.")
+
+    def _process_recording(self, audio_path: Path) -> None:
+        total_started_at = time.perf_counter()
+        try:
+            transcribe_started_at = time.perf_counter()
+            raw_transcript = self._transcribe_audio(audio_path)
+            log_timing("pipeline.transcribe", transcribe_started_at)
+            postprocess_started_at = time.perf_counter()
             transcript = postprocess_russian(
                 raw_transcript,
                 replacements=self.config.russian.replacements,
             )
+            log_timing("pipeline.postprocess", postprocess_started_at)
+            copy_started_at = time.perf_counter()
             paste_result = self.paste_inserter(transcript)
-            self.history_writer(transcript, raw_transcript, paste_result)
+            log_timing("pipeline.copy_to_clipboard", copy_started_at)
         except (AudioError, TranscriptionError, OSError, RuntimeError) as error:
             with self._lock:
-                return self._fail(str(error))
+                self._fail(str(error))
+                log_timing("pipeline.failed_total", total_started_at)
+                return
 
         with self._lock:
             self.state = DaemonState.IDLE
@@ -175,7 +192,11 @@ class DaemonService:
             self.last_transcript = transcript
             message = f"Transcription completed; paste mode={paste_result.mode.value}."
             self._notify_tray(DaemonState.IDLE, message, transcript)
-            return DaemonResponse(True, self.state, message, transcript)
+
+        history_started_at = time.perf_counter()
+        self.history_writer(transcript, raw_transcript, paste_result)
+        log_timing("pipeline.history", history_started_at)
+        log_timing("pipeline.total", total_started_at)
 
     def status(self) -> DaemonResponse:
         with self._lock:
@@ -308,7 +329,7 @@ class DaemonService:
         return StreamingRecorder(audio_path)
 
     def _default_paste_inserter(self, text: str) -> PasteResult:
-        return insert_or_copy(text, config=self.config.paste)
+        return copy_to_clipboard(text)
 
     def _default_history_writer(
         self,
@@ -328,6 +349,27 @@ class DaemonService:
             )
         except Exception:
             return
+
+    def _transcribe_audio(self, audio_path: Path) -> str:
+        request = TranscriptionRequest(
+            audio_path=audio_path,
+            language=self.config.general.language,
+            profile_name=self.config.transcription.model_profile,
+            backend=self.config.transcription.backend,
+        )
+        try:
+            return self.transcriber(request)
+        except TranscriptionError as error:
+            if not should_fallback_to_quality(str(error), self.config.transcription.model_profile):
+                raise
+            return self.transcriber(
+                TranscriptionRequest(
+                    audio_path=audio_path,
+                    language=self.config.general.language,
+                    profile_name="russian",
+                    backend="auto",
+                )
+            )
 
     def _fail(self, message: str) -> DaemonResponse:
         self.state = DaemonState.IDLE
@@ -375,6 +417,12 @@ def send_command(
         message=str(data["message"]),
         transcript=str(data["transcript"]) if "transcript" in data else None,
     )
+
+
+def should_fallback_to_quality(error_message: str, profile_name: str) -> bool:
+    if profile_name == "russian":
+        return False
+    return "whisper.cpp binary not found" in error_message
 
 
 def listen_evdev_hotkey(key_code: str) -> Iterator[HotkeyEvent]:
@@ -554,6 +602,11 @@ def show_transcript_notification(text: str) -> None:
     if shutil.which("notify-send") is None:
         return
     start_detached_command(["notify-send", "Voicium transcription", text])
+
+
+def log_timing(stage: str, started_at: float) -> None:
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    print(f"[voicium timing] {stage}: {elapsed_ms:.1f} ms", flush=True)
 
 
 def _device_supports_key(device: object, key_code: str) -> bool:

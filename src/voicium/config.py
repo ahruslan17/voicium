@@ -38,7 +38,7 @@ class TranscriptionConfig:
 
 @dataclass(frozen=True, slots=True)
 class PasteConfig:
-    auto_paste: bool = True
+    auto_paste: bool = False
     restore_clipboard: bool = False
     restore_delay_ms: int = 500
     fallback_to_clipboard: bool = True

@@ -60,23 +60,31 @@ class PasteManager:
         self.tool_finder = tool_finder or shutil.which
 
     def insert_or_copy(self, text: str) -> PasteResult:
+        total_started_at = time.perf_counter()
         if not text.strip():
             return PasteResult(PasteMode.FAILED, "No text to paste.")
 
+        select_started_at = time.perf_counter()
         backend = select_paste_backend(self.env, tool_finder=self.tool_finder)
+        log_timing("paste.select_backend", select_started_at)
         if backend.clipboard_command is None:
             return PasteResult(PasteMode.FAILED, "No clipboard backend is available.")
 
         previous_clipboard = self._read_clipboard(backend)
+        copy_started_at = time.perf_counter()
         copy_result = self.command_runner(backend.clipboard_command, text)
+        log_timing("paste.copy", copy_started_at)
         if copy_result.returncode != 0:
             details = copy_result.stderr or copy_result.stdout or "clipboard command failed"
             return PasteResult(PasteMode.FAILED, f"Unable to copy text to clipboard: {details}")
 
         if not self.config.auto_paste or backend.paste_command is None:
+            log_timing("paste.total", total_started_at)
             return PasteResult(PasteMode.COPIED, "Text copied to clipboard; press Ctrl+V to paste.")
 
+        paste_started_at = time.perf_counter()
         paste_result = self.command_runner(backend.paste_command, None)
+        log_timing("paste.auto_paste", paste_started_at)
         if paste_result.returncode != 0:
             details = paste_result.stderr or paste_result.stdout or "paste command failed"
             return PasteResult(
@@ -88,6 +96,7 @@ class PasteManager:
             time.sleep(self.config.restore_delay_ms / 1000)
             self.command_runner(backend.clipboard_command, previous_clipboard)
 
+        log_timing("paste.total", total_started_at)
         return PasteResult(PasteMode.PASTED, "Text pasted into the focused field.")
 
     def _read_clipboard(self, backend: PasteBackend) -> str | None:
@@ -115,8 +124,39 @@ def insert_or_copy(
     )
     result = manager.insert_or_copy(text)
     if config is None or config.notify:
+        notify_started_at = time.perf_counter()
         notify_paste_result(result, command_runner=command_runner, tool_finder=tool_finder)
+        log_timing("paste.notify", notify_started_at)
     return result
+
+
+def copy_to_clipboard(
+    text: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    command_runner: CommandRunner | None = None,
+    tool_finder: ToolFinder | None = None,
+) -> PasteResult:
+    if not text.strip():
+        return PasteResult(PasteMode.FAILED, "No text to copy.")
+
+    backend = select_paste_backend(env or os.environ, tool_finder=tool_finder)
+    if backend.clipboard_command is None:
+        return PasteResult(PasteMode.FAILED, "No clipboard backend is available.")
+
+    if (
+        tuple(backend.clipboard_command) == ("xclip", "-selection", "clipboard")
+        and command_runner is None
+    ):
+        result = start_xclip_owner(text, wait_for_start=False)
+    else:
+        runner = command_runner or run_command
+        result = runner(backend.clipboard_command, text)
+
+    if result.returncode != 0:
+        details = result.stderr or result.stdout or "clipboard command failed"
+        return PasteResult(PasteMode.FAILED, f"Unable to copy text to clipboard: {details}")
+    return PasteResult(PasteMode.COPIED, "Text copied to clipboard.")
 
 
 def select_paste_backend(
@@ -190,9 +230,10 @@ def run_command(args: Sequence[str], input_text: str | None) -> CommandResult:
     )
 
 
-def start_xclip_owner(text: str) -> CommandResult:
+def start_xclip_owner(text: str, *, wait_for_start: bool = True) -> CommandResult:
+    started_at = time.perf_counter()
     process = subprocess.Popen(
-        ["xclip", "-selection", "clipboard"],
+        ["xclip", "-selection", "clipboard", "-loops", "1"],
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -204,12 +245,17 @@ def start_xclip_owner(text: str) -> CommandResult:
     process.stdin.write(text)
     process.stdin.close()
 
+    if not wait_for_start:
+        return CommandResult(returncode=0, stdout="", stderr="")
+
     try:
         returncode = process.wait(timeout=0.1)
     except subprocess.TimeoutExpired:
+        log_timing("paste.xclip_owner", started_at)
         return CommandResult(returncode=0, stdout="", stderr="")
 
     stderr = process.stderr.read().strip()
+    log_timing("paste.xclip_owner", started_at)
     if returncode != 0:
         return CommandResult(returncode=returncode, stdout="", stderr=stderr)
     return CommandResult(returncode=0, stdout="", stderr="")
@@ -229,3 +275,8 @@ def start_detached_command(args: Sequence[str]) -> None:
     import threading
 
     threading.Thread(target=wait_for_process, daemon=True).start()
+
+
+def log_timing(stage: str, started_at: float) -> None:
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    print(f"[voicium timing] {stage}: {elapsed_ms:.1f} ms", flush=True)

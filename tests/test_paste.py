@@ -9,6 +9,7 @@ from voicium.paste import (
     PasteManager,
     PasteMode,
     PasteResult,
+    copy_to_clipboard,
     notify_paste_result,
     run_command,
     select_paste_backend,
@@ -47,6 +48,7 @@ def test_wayland_paste_failure_keeps_text_copied() -> None:
         return CommandResult(0, "", "")
 
     manager = PasteManager(
+        config=PasteConfig(auto_paste=True),
         env={"XDG_SESSION_TYPE": "wayland"},
         command_runner=runner,
         tool_finder=lambda tool: f"/usr/bin/{tool}",
@@ -132,3 +134,21 @@ def test_notify_paste_result_is_detached_by_default(monkeypatch) -> None:
     notify_paste_result(PasteResult(PasteMode.COPIED, "copied"))
 
     assert calls == [("notify-send", "Voicium", "copied")]
+
+
+def test_copy_to_clipboard_does_not_attempt_auto_paste() -> None:
+    calls: list[tuple[tuple[str, ...], str | None]] = []
+
+    def runner(args: Sequence[str], input_text: str | None) -> CommandResult:
+        calls.append((tuple(args), input_text))
+        return CommandResult(0, "", "")
+
+    result = copy_to_clipboard(
+        "привет",
+        env={"XDG_SESSION_TYPE": "wayland"},
+        command_runner=runner,
+        tool_finder=lambda tool: f"/usr/bin/{tool}",
+    )
+
+    assert result.mode == PasteMode.COPIED
+    assert calls == [(("wl-copy",), "привет")]

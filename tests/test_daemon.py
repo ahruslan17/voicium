@@ -22,10 +22,11 @@ from voicium.daemon import (
     _apply_tray_event,
     listen_evdev_hotkey,
     send_command,
+    should_fallback_to_quality,
     show_transcript_notification,
 )
 from voicium.paste import PasteMode, PasteResult
-from voicium.transcription import TranscriptionRequest
+from voicium.transcription import TranscriptionError, TranscriptionRequest
 
 
 class FakeProcess:
@@ -72,16 +73,31 @@ def test_daemon_start_stop_transcribes_and_returns_idle(tmp_path: Path) -> None:
 
     start = service.handle_command(DaemonCommand.START_RECORDING.value)
     stop = service.handle_command(DaemonCommand.STOP_RECORDING.value)
+    _wait_for_state(service, DaemonState.IDLE)
 
     assert start.ok is True
     assert start.state == DaemonState.RECORDING
     assert stop.ok is True
-    assert stop.state == DaemonState.IDLE
-    assert stop.transcript == "привет"
-    assert "paste mode=pasted" in stop.message
+    assert stop.message == "Recording stopped; transcription started."
+    assert service.last_transcript == "привет"
     assert len(requests) == 1
     assert pasted == ["привет"]
     assert history == [("привет", "привет", PasteResult(PasteMode.PASTED, "pasted"))]
+
+
+def test_default_daemon_paste_inserter_disables_auto_paste(monkeypatch) -> None:
+    calls: list[object] = []
+
+    def fake_copy_to_clipboard(text: str) -> PasteResult:
+        calls.append(text)
+        return PasteResult(PasteMode.COPIED, "copied")
+
+    monkeypatch.setattr("voicium.daemon.copy_to_clipboard", fake_copy_to_clipboard)
+
+    result = DaemonService(config=AppConfig.default())._default_paste_inserter("привет")
+
+    assert result.mode == PasteMode.COPIED
+    assert calls == ["привет"]
 
 
 def test_daemon_postprocesses_transcript_before_paste(tmp_path: Path) -> None:
@@ -103,8 +119,10 @@ def test_daemon_postprocesses_transcript_before_paste(tmp_path: Path) -> None:
 
     service.handle_command(DaemonCommand.START_RECORDING.value)
     response = service.handle_command(DaemonCommand.STOP_RECORDING.value)
+    _wait_for_state(service, DaemonState.IDLE)
 
-    assert response.transcript == "привет, OpenCode"
+    assert response.ok is True
+    assert service.last_transcript == "привет, OpenCode"
     assert pasted == ["привет, OpenCode"]
 
 
@@ -172,10 +190,52 @@ def test_daemon_returns_error_when_paste_fails(tmp_path: Path) -> None:
 
     service.handle_command(DaemonCommand.START_RECORDING.value)
     response = service.handle_command(DaemonCommand.STOP_RECORDING.value)
+    _wait_for_state(service, DaemonState.IDLE)
 
-    assert response.ok is False
-    assert response.state == DaemonState.IDLE
-    assert response.message == "paste failed"
+    assert response.ok is True
+    assert response.message == "Recording stopped; transcription started."
+    assert service.last_error == "paste failed"
+
+
+def test_daemon_falls_back_to_quality_when_whisper_cpp_binary_is_missing(
+    tmp_path: Path,
+) -> None:
+    requests: list[TranscriptionRequest] = []
+
+    def recorder_factory(path: Path) -> StreamingRecorder:
+        def process_factory(_args: list[str]) -> FakeProcess:
+            path.write_bytes(b"wav")
+            return FakeProcess()
+
+        return StreamingRecorder(path, process_factory=process_factory)
+
+    def transcriber(request: TranscriptionRequest) -> str:
+        requests.append(request)
+        if request.profile_name == "fast":
+            raise TranscriptionError("whisper.cpp binary not found")
+        return "fallback transcript"
+
+    service = DaemonService(
+        config=AppConfig.default().with_runtime_mode("fast"),
+        recorder_factory=recorder_factory,
+        transcriber=transcriber,
+        paste_inserter=lambda _text: PasteResult(PasteMode.COPIED, "copied"),
+        history_writer=lambda _text, _raw, _result: None,
+    )
+
+    service.handle_command(DaemonCommand.START_RECORDING.value)
+    response = service.handle_command(DaemonCommand.STOP_RECORDING.value)
+    _wait_for_state(service, DaemonState.IDLE)
+
+    assert response.ok is True
+    assert service.last_transcript == "fallback transcript"
+    assert [request.profile_name for request in requests] == ["fast", "russian"]
+
+
+def test_fallback_to_quality_only_for_missing_whisper_cpp_binary() -> None:
+    assert should_fallback_to_quality("whisper.cpp binary not found", "fast") is True
+    assert should_fallback_to_quality("whisper.cpp binary not found", "russian") is False
+    assert should_fallback_to_quality("other", "fast") is False
 
 
 def test_daemon_socket_status(tmp_path: Path) -> None:
@@ -303,6 +363,7 @@ def test_daemon_emits_tray_events_for_recording_and_completion(tmp_path: Path) -
 
     service.handle_command(DaemonCommand.START_RECORDING.value)
     service.handle_command(DaemonCommand.STOP_RECORDING.value)
+    _wait_for_state(service, DaemonState.IDLE)
 
     events = [service._tray_events.get_nowait() for _ in range(3)]
     assert [event.state for event in events] == [
@@ -358,14 +419,24 @@ def test_show_transcript_notification_is_best_effort(monkeypatch) -> None:
 
 
 def _wait_for_socket(socket_path: Path) -> None:
-    for _ in range(100):
+    for _ in range(500):
         if socket_path.exists():
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
                 try:
                     client.connect(str(socket_path))
                 except OSError:
+                    time.sleep(0.01)
                     continue
                 client.sendall(DaemonCommand.STATUS.value.encode() + b"\n")
                 client.recv(4096)
             return
+        time.sleep(0.01)
     raise AssertionError("socket was not created")
+
+
+def _wait_for_state(service: DaemonService, state: DaemonState) -> None:
+    for _ in range(100):
+        if service.state == state:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"daemon did not reach state {state}")
