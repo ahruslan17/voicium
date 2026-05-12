@@ -142,7 +142,7 @@ def test_run_command_starts_fast_clipboard_owner(monkeypatch) -> None:
     result = run_command(("xclip", "-selection", "clipboard"), "привет")
 
     assert result.returncode == 0
-    assert commands == [["xclip", "-selection", "clipboard", "-loops", "1"]]
+    assert commands == [["xclip", "-selection", "clipboard", "-loops", "10"]]
     assert writes == ["привет", "closed"]
 
 
@@ -208,7 +208,7 @@ def test_copy_to_clipboard_waits_for_fast_owner_start(monkeypatch) -> None:
     )
 
     assert result.mode == PasteMode.COPIED
-    assert waited == [0.1]
+    assert waited[0] == 0.1
 
 
 def test_notify_paste_result_is_detached_by_default(monkeypatch) -> None:

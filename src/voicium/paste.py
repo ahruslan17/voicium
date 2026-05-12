@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -250,6 +251,11 @@ def start_clipboard_owner(
 ) -> CommandResult:
     started_at = time.perf_counter()
     command = clipboard_owner_command(args)
+    if tuple(args) == ("xclip", "-selection", "clipboard"):
+        result = start_xclip_owner(command, text)
+        log_timing("paste.clipboard_owner", started_at)
+        return result
+
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -269,6 +275,7 @@ def start_clipboard_owner(
     try:
         returncode = process.wait(timeout=0.1)
     except subprocess.TimeoutExpired:
+        wait_for_process(process)
         log_timing("paste.clipboard_owner", started_at)
         return CommandResult(returncode=0, stdout="", stderr="")
 
@@ -279,10 +286,26 @@ def start_clipboard_owner(
     return CommandResult(returncode=0, stdout="", stderr="")
 
 
+def start_xclip_owner(command: Sequence[str], text: str) -> CommandResult:
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        start_new_session=True,
+    )
+    assert process.stdin is not None
+    process.stdin.write(text)
+    process.stdin.close()
+    wait_for_process(process)
+    return CommandResult(returncode=0, stdout="", stderr="")
+
+
 def clipboard_owner_command(args: Sequence[str]) -> list[str]:
     command = list(args)
     if tuple(args) == ("xclip", "-selection", "clipboard"):
-        command.extend(["-loops", "1"])
+        command.extend(["-loops", "10"])
     return command
 
 
@@ -294,12 +317,17 @@ def start_detached_command(args: Sequence[str]) -> None:
         start_new_session=True,
     )
 
-    def wait_for_process() -> None:
-        process.wait()
+    wait_for_process(process)
 
-    import threading
 
-    threading.Thread(target=wait_for_process, daemon=True).start()
+def wait_for_process(process: subprocess.Popen[object]) -> None:
+    def wait() -> None:
+        try:
+            process.wait()
+        except Exception:
+            return
+
+    threading.Thread(target=wait, daemon=True).start()
 
 
 def log_timing(stage: str, started_at: float) -> None:
