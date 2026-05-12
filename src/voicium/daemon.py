@@ -44,6 +44,7 @@ class DaemonCommand(StrEnum):
 @dataclass(frozen=True, slots=True)
 class HotkeyEvent:
     pressed: bool
+    key_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,7 +268,7 @@ class DaemonService:
         with self._lock:
             self.config = self.config.with_hotkey(key)
             save_config(self.config)
-            message = f"Hotkey set to {key}. Restart daemon to apply listener changes."
+            message = f"Hotkey set to {key}."
             self._notify_tray(DaemonState.IDLE, message)
             return DaemonResponse(True, self.state, message)
 
@@ -312,16 +313,20 @@ class DaemonService:
 
     def _run_hotkey_listener(self) -> None:
         try:
-            for event in self.hotkey_listener(self.config.hotkey.key):
+            for event in self.hotkey_listener(""):
                 if self._stop_requested.is_set():
                     return
-                if event.pressed:
-                    self.start_recording()
-                else:
-                    self.stop_recording()
+                self._handle_hotkey_event(event)
         except DaemonError as error:
             with self._lock:
                 self._fail(str(error))
+
+    def _handle_hotkey_event(self, event: HotkeyEvent) -> DaemonResponse | None:
+        if event.key_code is not None and event.key_code != self.config.hotkey.key:
+            return None
+        if event.pressed:
+            return self.start_recording()
+        return self.stop_recording()
 
     def _run_status_icon(self) -> None:
         try:
@@ -436,7 +441,7 @@ def should_fallback_to_quality(error_message: str, profile_name: str) -> bool:
     return "whisper.cpp binary not found" in error_message
 
 
-def listen_evdev_hotkey(key_code: str) -> Iterator[HotkeyEvent]:
+def listen_evdev_hotkey(_key_code: str) -> Iterator[HotkeyEvent]:
     try:
         import evdev
     except ImportError as error:
@@ -445,15 +450,15 @@ def listen_evdev_hotkey(key_code: str) -> Iterator[HotkeyEvent]:
         ) from error
 
     devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
-    keyboards = [device for device in devices if _device_supports_key(device, key_code)]
+    keyboards = [device for device in devices if _device_has_keys(device)]
     if not keyboards:
-        raise DaemonError(f"No readable input device supports {key_code}.")
+        raise DaemonError("No readable input devices with key events found.")
 
     events: queue.Queue[HotkeyEvent] = queue.Queue()
     for device in keyboards:
         threading.Thread(
             target=_read_evdev_device,
-            args=(device, key_code, events, evdev),
+            args=(device, events, evdev),
             daemon=True,
         ).start()
 
@@ -463,7 +468,6 @@ def listen_evdev_hotkey(key_code: str) -> Iterator[HotkeyEvent]:
 
 def _read_evdev_device(
     device: object,
-    key_code: str,
     events: queue.Queue[HotkeyEvent],
     evdev_module: object,
 ) -> None:
@@ -472,11 +476,17 @@ def _read_evdev_device(
             if event.type != evdev_module.ecodes.EV_KEY:  # type: ignore[attr-defined]
                 continue
             key_event = evdev_module.categorize(event)  # type: ignore[attr-defined]
-            if not _keycode_matches(key_event.keycode, key_code):
+            key_code = _first_keycode(key_event.keycode)
+            if key_code is None:
                 continue
             if key_event.keystate == key_event.key_hold:
                 continue
-            events.put(HotkeyEvent(pressed=key_event.keystate == key_event.key_down))
+            events.put(
+                HotkeyEvent(
+                    pressed=key_event.keystate == key_event.key_down,
+                    key_code=key_code,
+                )
+            )
     except OSError:
         return
 
@@ -487,6 +497,16 @@ def _keycode_matches(actual: object, expected: str) -> bool:
     if isinstance(actual, (list, tuple, set)):
         return expected in actual
     return False
+
+
+def _first_keycode(actual: object) -> str | None:
+    if isinstance(actual, str):
+        return actual
+    if isinstance(actual, (list, tuple)):
+        for item in actual:
+            if isinstance(item, str):
+                return item
+    return None
 
 
 def start_status_icon(events: queue.Queue[TrayEvent]) -> None:
@@ -692,13 +712,12 @@ def log_timing(stage: str, started_at: float) -> None:
     print(f"[voicium timing] {stage}: {elapsed_ms:.1f} ms", flush=True)
 
 
-def _device_supports_key(device: object, key_code: str) -> bool:
+def _device_has_keys(device: object) -> bool:
     try:
         capabilities = device.capabilities(verbose=True)  # type: ignore[attr-defined]
     except OSError:
         return False
-    key_capabilities = capabilities.get(("EV_KEY", 1), [])
-    return any(entry[0] == key_code for entry in key_capabilities)
+    return bool(capabilities.get(("EV_KEY", 1), []))
 
 
 def _read_command(connection: socket.socket) -> str:

@@ -18,6 +18,7 @@ from voicium.daemon import (
     DaemonError,
     DaemonService,
     DaemonState,
+    HotkeyEvent,
     TrayEvent,
     _append_audio_input_menu,
     _append_hotkey_menu,
@@ -175,6 +176,41 @@ def test_daemon_updates_runtime_mode_and_hotkey(tmp_path: Path, monkeypatch) -> 
     assert service.config.transcription.model_profile == "fast"
     assert service.config.hotkey.key == "KEY_F8"
     assert config_path.exists()
+
+
+def test_daemon_applies_hotkey_change_without_listener_restart(tmp_path: Path) -> None:
+    paths: list[Path] = []
+
+    def recorder_factory(path: Path) -> StreamingRecorder:
+        paths.append(path)
+
+        def process_factory(_args: list[str]) -> FakeProcess:
+            path.write_bytes(b"wav")
+            return FakeProcess()
+
+        return StreamingRecorder(path, process_factory=process_factory)
+
+    service = DaemonService(
+        config=AppConfig.default(),
+        recorder_factory=recorder_factory,
+        transcriber=lambda _request: "привет",
+        paste_inserter=lambda _text: PasteResult(PasteMode.COPIED, "copied"),
+        history_writer=lambda _text, _raw, _result: None,
+    )
+    service.handle_command("set_hotkey:KEY_F8")
+
+    service._handle_hotkey_event(HotkeyEvent(pressed=True, key_code="KEY_RIGHTCTRL"))
+    ignored_stop = service._handle_hotkey_event(
+        HotkeyEvent(pressed=False, key_code="KEY_RIGHTCTRL")
+    )
+    start = service._handle_hotkey_event(HotkeyEvent(pressed=True, key_code="KEY_F8"))
+    stop = service._handle_hotkey_event(HotkeyEvent(pressed=False, key_code="KEY_F8"))
+    _wait_for_state(service, DaemonState.IDLE)
+
+    assert ignored_stop is None
+    assert start is not None
+    assert stop is not None
+    assert len(paths) == 1
 
 
 def test_daemon_updates_audio_input(tmp_path: Path, monkeypatch) -> None:
@@ -385,6 +421,7 @@ def test_evdev_listener_reads_from_all_matching_keyboards(monkeypatch) -> None:
     event = next(listen_evdev_hotkey("KEY_RIGHTCTRL"))
 
     assert event.pressed is True
+    assert event.key_code == "KEY_RIGHTCTRL"
 
 
 def test_daemon_emits_tray_events_for_recording_and_completion(tmp_path: Path) -> None:

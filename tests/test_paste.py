@@ -13,6 +13,7 @@ from voicium.paste import (
     notify_paste_result,
     run_command,
     select_paste_backend,
+    start_clipboard_owner,
 )
 
 
@@ -25,6 +26,24 @@ def test_selects_wayland_backend_when_tools_exist() -> None:
     assert backend.clipboard_command == ("wl-copy",)
     assert backend.paste_command == ("ydotool", "key", "ctrl+v")
     assert backend.read_command == ("wl-paste", "--no-newline")
+
+
+def test_selects_wayland_backend_from_display_variable() -> None:
+    backend = select_paste_backend(
+        {"WAYLAND_DISPLAY": "wayland-0"},
+        tool_finder=lambda tool: f"/usr/bin/{tool}",
+    )
+
+    assert backend.clipboard_command == ("wl-copy",)
+
+
+def test_selects_x11_backend_from_display_variable() -> None:
+    def tool_finder(tool: str) -> str | None:
+        return f"/usr/bin/{tool}" if tool in {"xclip", "xdotool"} else None
+
+    backend = select_paste_backend({"DISPLAY": ":0"}, tool_finder=tool_finder)
+
+    assert backend.clipboard_command == ("xclip", "-selection", "clipboard")
 
 
 def test_selects_x11_xclip_backend_when_tools_exist() -> None:
@@ -87,14 +106,15 @@ def test_run_command_converts_timeout_to_result(monkeypatch) -> None:
 
     monkeypatch.setattr("subprocess.run", timeout_run)
 
-    result = run_command(("wl-copy",), "привет")
+    result = run_command(("custom-copy",), "привет")
 
     assert result.returncode == 124
     assert "timed out" in result.stderr
 
 
-def test_run_command_starts_xclip_owner(monkeypatch) -> None:
+def test_run_command_starts_fast_clipboard_owner(monkeypatch) -> None:
     writes: list[str] = []
+    commands: list[list[str]] = []
 
     class FakePipe:
         def write(self, text: str) -> None:
@@ -113,7 +133,8 @@ def test_run_command_starts_xclip_owner(monkeypatch) -> None:
         def wait(self, timeout: float | None = None) -> int:
             raise subprocess.TimeoutExpired(("xclip",), timeout=timeout)
 
-    def fake_popen(*_args: object, **_kwargs: object) -> FakeProcess:
+    def fake_popen(args: list[str], *_other_args: object, **_kwargs: object) -> FakeProcess:
+        commands.append(args)
         return FakeProcess()
 
     monkeypatch.setattr("subprocess.Popen", fake_popen)
@@ -121,7 +142,73 @@ def test_run_command_starts_xclip_owner(monkeypatch) -> None:
     result = run_command(("xclip", "-selection", "clipboard"), "привет")
 
     assert result.returncode == 0
+    assert commands == [["xclip", "-selection", "clipboard", "-loops", "1"]]
     assert writes == ["привет", "closed"]
+
+
+def test_wl_copy_owner_keeps_command_minimal(monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    class FakePipe:
+        def write(self, _text: str) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+        def read(self) -> str:
+            return ""
+
+    class FakeProcess:
+        stdin = FakePipe()
+        stderr = FakePipe()
+
+        def wait(self, timeout: float | None = None) -> int:
+            raise subprocess.TimeoutExpired(("wl-copy",), timeout=timeout)
+
+    def fake_popen(args: list[str], *_other_args: object, **_kwargs: object) -> FakeProcess:
+        commands.append(args)
+        return FakeProcess()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    result = start_clipboard_owner(("wl-copy",), "привет")
+
+    assert result.returncode == 0
+    assert commands == [["wl-copy"]]
+
+
+def test_copy_to_clipboard_waits_for_fast_owner_start(monkeypatch) -> None:
+    waited: list[float | None] = []
+
+    class FakePipe:
+        def write(self, _text: str) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+        def read(self) -> str:
+            return ""
+
+    class FakeProcess:
+        stdin = FakePipe()
+        stderr = FakePipe()
+
+        def wait(self, timeout: float | None = None) -> int:
+            waited.append(timeout)
+            raise subprocess.TimeoutExpired(("wl-copy",), timeout=timeout)
+
+    monkeypatch.setattr("subprocess.Popen", lambda *_args, **_kwargs: FakeProcess())
+
+    result = copy_to_clipboard(
+        "привет",
+        env={"WAYLAND_DISPLAY": "wayland-0"},
+        tool_finder=lambda tool: f"/usr/bin/{tool}" if tool == "wl-copy" else None,
+    )
+
+    assert result.mode == PasteMode.COPIED
+    assert waited == [0.1]
 
 
 def test_notify_paste_result_is_detached_by_default(monkeypatch) -> None:

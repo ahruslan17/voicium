@@ -144,11 +144,8 @@ def copy_to_clipboard(
     if backend.clipboard_command is None:
         return PasteResult(PasteMode.FAILED, "No clipboard backend is available.")
 
-    if (
-        tuple(backend.clipboard_command) == ("xclip", "-selection", "clipboard")
-        and command_runner is None
-    ):
-        result = start_xclip_owner(text, wait_for_start=False)
+    if command_runner is None and supports_fast_clipboard_owner(backend.clipboard_command):
+        result = start_clipboard_owner(backend.clipboard_command, text)
     else:
         runner = command_runner or run_command
         result = runner(backend.clipboard_command, text)
@@ -166,13 +163,13 @@ def select_paste_backend(
 ) -> PasteBackend:
     finder = tool_finder or shutil.which
     session_type = env.get("XDG_SESSION_TYPE", "").lower()
-    if session_type == "wayland":
+    if session_type == "wayland" or (not session_type and env.get("WAYLAND_DISPLAY")):
         clipboard = ("wl-copy",) if finder("wl-copy") else None
         read = ("wl-paste", "--no-newline") if finder("wl-paste") else None
         paste = ("ydotool", "key", "ctrl+v") if finder("ydotool") else None
         return PasteBackend(clipboard, paste, read)
 
-    if session_type == "x11":
+    if session_type == "x11" or (not session_type and env.get("DISPLAY")):
         if finder("xclip"):
             clipboard = ("xclip", "-selection", "clipboard")
             read = ("xclip", "-selection", "clipboard", "-o")
@@ -185,6 +182,12 @@ def select_paste_backend(
         paste = ("xdotool", "key", "ctrl+v") if finder("xdotool") else None
         return PasteBackend(clipboard, paste, read)
 
+    if finder("wl-copy"):
+        return PasteBackend(("wl-copy",), None, None)
+    if finder("xclip"):
+        return PasteBackend(("xclip", "-selection", "clipboard"), None, None)
+    if finder("xsel"):
+        return PasteBackend(("xsel", "--clipboard", "--input"), None, None)
     return PasteBackend(None, None, None)
 
 
@@ -205,8 +208,8 @@ def notify_paste_result(
 
 
 def run_command(args: Sequence[str], input_text: str | None) -> CommandResult:
-    if input_text is not None and tuple(args) == ("xclip", "-selection", "clipboard"):
-        return start_xclip_owner(input_text)
+    if input_text is not None and supports_fast_clipboard_owner(args):
+        return start_clipboard_owner(args, input_text)
 
     try:
         completed = subprocess.run(
@@ -230,10 +233,25 @@ def run_command(args: Sequence[str], input_text: str | None) -> CommandResult:
     )
 
 
-def start_xclip_owner(text: str, *, wait_for_start: bool = True) -> CommandResult:
+def supports_fast_clipboard_owner(args: Sequence[str] | None) -> bool:
+    if args is None:
+        return False
+    return tuple(args) in {
+        ("wl-copy",),
+        ("xclip", "-selection", "clipboard"),
+    }
+
+
+def start_clipboard_owner(
+    args: Sequence[str],
+    text: str,
+    *,
+    wait_for_start: bool = True,
+) -> CommandResult:
     started_at = time.perf_counter()
+    command = clipboard_owner_command(args)
     process = subprocess.Popen(
-        ["xclip", "-selection", "clipboard", "-loops", "1"],
+        command,
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -251,14 +269,21 @@ def start_xclip_owner(text: str, *, wait_for_start: bool = True) -> CommandResul
     try:
         returncode = process.wait(timeout=0.1)
     except subprocess.TimeoutExpired:
-        log_timing("paste.xclip_owner", started_at)
+        log_timing("paste.clipboard_owner", started_at)
         return CommandResult(returncode=0, stdout="", stderr="")
 
     stderr = process.stderr.read().strip()
-    log_timing("paste.xclip_owner", started_at)
+    log_timing("paste.clipboard_owner", started_at)
     if returncode != 0:
         return CommandResult(returncode=returncode, stdout="", stderr=stderr)
     return CommandResult(returncode=0, stdout="", stderr="")
+
+
+def clipboard_owner_command(args: Sequence[str]) -> list[str]:
+    command = list(args)
+    if tuple(args) == ("xclip", "-selection", "clipboard"):
+        command.extend(["-loops", "1"])
+    return command
 
 
 def start_detached_command(args: Sequence[str]) -> None:
