@@ -18,8 +18,8 @@ def test_default_config_is_russian_push_to_talk() -> None:
     assert config.hotkey.backend == "evdev"
     assert config.audio.input_device is None
     assert config.transcription.backend == "auto"
-    assert config.transcription.model_profile == "russian"
-    assert config.transcription.runtime_mode == RuntimeMode.QUALITY.value
+    assert config.transcription.model_profile == "fast"
+    assert config.transcription.runtime_mode == RuntimeMode.FAST.value
     assert config.paste.auto_paste is False
     assert config.paste.fallback_to_clipboard is True
     assert config.russian.replacements["опенкод"] == "OpenCode"

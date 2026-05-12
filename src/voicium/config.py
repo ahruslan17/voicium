@@ -36,8 +36,8 @@ class AudioConfig:
 @dataclass(frozen=True, slots=True)
 class TranscriptionConfig:
     backend: str = "auto"
-    model_profile: str = "russian"
-    runtime_mode: str = RuntimeMode.QUALITY.value
+    model_profile: str = "fast"
+    runtime_mode: str = RuntimeMode.FAST.value
     preload_model: bool = True
 
 

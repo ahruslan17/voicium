@@ -160,7 +160,7 @@ def test_daemon_status_includes_hotkey_and_runtime_mode() -> None:
     response = DaemonService(config=AppConfig.default()).status()
 
     assert "hotkey=KEY_RIGHTCTRL" in response.message
-    assert "runtime_mode=quality" in response.message
+    assert "runtime_mode=fast" in response.message
 
 
 def test_daemon_updates_runtime_mode_and_hotkey(tmp_path: Path, monkeypatch) -> None:
