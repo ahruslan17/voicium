@@ -249,6 +249,7 @@ The tray menu exposes runtime choices:
 | `Hotkey` | push-to-talk key | applies without restarting the daemon |
 | `Microphone` | PulseAudio/PipeWire input source | applies to the next recording |
 | `Transcription Mode` | model/runtime profile | applies to the next transcription |
+| `Paste` | auto-paste toggle | applies to the next transcription |
 
 Selected items are shown as radio-style menu entries and are saved to:
 
@@ -266,6 +267,9 @@ key = "KEY_F8"
 [audio]
 input_device = "alsa_input.usb-Web-camera.analog-stereo"
 
+[general]
+language = "auto"
+
 [transcription]
 backend = "auto"
 model_profile = "fast"
@@ -281,13 +285,17 @@ notify = true
 
 | Mode | Profile | Best For |
 | --- | --- | --- |
-| `quality` | Russian Transformers model | best Russian recognition quality |
-| `fast` | whisper.cpp small quantized model | low latency |
+| `quality` | whisper.cpp large-v3-turbo quantized model | best multilingual recognition quality |
+| `fast` | whisper.cpp small quantized model | low latency and fast startup |
 | `balanced` | whisper.cpp medium quantized model | middle ground |
 
 `fast` is the default mode. It is designed to start quickly and avoid a heavy first-run download.
-The `russian` profile used by `quality` mode is a large Hugging Face model and can take a long
-time to download the first time it is selected or downloaded manually.
+The default language is `auto`, so Russian speech stays Russian, English speech stays English, and
+mixed dictation is handled by Whisper language detection instead of forced translation.
+
+The legacy `russian` profile uses a large Hugging Face model and can take a long time to download
+if selected or downloaded manually. It is not the default because it is optimized for Russian-only
+dictation.
 
 Download models:
 
@@ -295,6 +303,7 @@ Download models:
 voicium models download russian
 voicium models download fast
 voicium models download balanced
+voicium models download accurate
 ```
 
 Models are stored under:
@@ -311,6 +320,8 @@ Voicium prioritizes not losing recognized text.
 - On X11, it uses `xclip` or `xsel`.
 - Clipboard copy is optimized for low latency.
 - If auto-paste is disabled or unavailable, text remains in clipboard.
+- `auto_paste = false` by default, so Voicium only copies text to clipboard.
+- When `auto_paste = true`, Voicium copies the text and then sends `Ctrl+V` to the active field.
 
 ## Developer Workflow
 

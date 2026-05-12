@@ -22,6 +22,7 @@ from voicium.daemon import (
     TrayEvent,
     _append_audio_input_menu,
     _append_hotkey_menu,
+    _append_paste_menu,
     _append_runtime_mode_menu,
     _apply_tray_event,
     listen_evdev_hotkey,
@@ -89,19 +90,20 @@ def test_daemon_start_stop_transcribes_and_returns_idle(tmp_path: Path) -> None:
     assert history == [("привет", "привет", PasteResult(PasteMode.PASTED, "pasted"))]
 
 
-def test_default_daemon_paste_inserter_disables_auto_paste(monkeypatch) -> None:
-    calls: list[object] = []
+def test_default_daemon_paste_inserter_uses_paste_config(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
 
-    def fake_copy_to_clipboard(text: str) -> PasteResult:
-        calls.append(text)
+    def fake_insert_or_copy(text: str, *, config: object) -> PasteResult:
+        calls.append((text, config))
         return PasteResult(PasteMode.COPIED, "copied")
 
-    monkeypatch.setattr("voicium.daemon.copy_to_clipboard", fake_copy_to_clipboard)
+    monkeypatch.setattr("voicium.daemon.insert_or_copy", fake_insert_or_copy)
+    config = AppConfig.default().with_auto_paste(True)
 
-    result = DaemonService(config=AppConfig.default())._default_paste_inserter("привет")
+    result = DaemonService(config=config)._default_paste_inserter("привет")
 
     assert result.mode == PasteMode.COPIED
-    assert calls == ["привет"]
+    assert calls == [("привет", config.paste)]
 
 
 def test_default_daemon_recorder_uses_configured_audio_device() -> None:
@@ -234,6 +236,27 @@ def test_daemon_resets_audio_input_to_default(tmp_path: Path, monkeypatch) -> No
 
     assert response.ok is True
     assert service.config.audio.input_device is None
+
+
+def test_daemon_updates_auto_paste(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    monkeypatch.setattr("voicium.config.default_config_path", lambda: config_path)
+    service = DaemonService(config=AppConfig.default())
+
+    enable_response = service.handle_command("set_auto_paste:true")
+    disable_response = service.handle_command("set_auto_paste:false")
+
+    assert enable_response.ok is True
+    assert disable_response.ok is True
+    assert service.config.paste.auto_paste is False
+    assert "auto_paste = false" in config_path.read_text(encoding="utf-8")
+
+
+def test_daemon_rejects_invalid_auto_paste_value() -> None:
+    response = DaemonService(config=AppConfig.default()).handle_command("set_auto_paste:yes")
+
+    assert response.ok is False
+    assert "Invalid auto-paste value" in response.message
 
 
 def test_daemon_reloads_config(tmp_path: Path, monkeypatch) -> None:
@@ -553,6 +576,24 @@ def test_append_runtime_mode_menu_marks_selected_mode() -> None:
     assert [item.active for item in submenu.items] == [False, False, True]
 
 
+def test_append_paste_menu_marks_auto_paste_state(monkeypatch) -> None:
+    commands: list[str] = []
+    monkeypatch.setattr("voicium.daemon._send_tray_command", commands.append)
+    menu = FakeGtk.Menu()
+
+    _append_paste_menu(FakeGtk, menu, AppConfig.default().with_auto_paste(True))
+
+    parent = menu.items[0]
+    submenu = parent.submenu
+    item = submenu.items[0]
+    item.activate()
+
+    assert parent.label == "Paste"
+    assert item.label == "Auto-paste"
+    assert item.active is True
+    assert commands == ["set_auto_paste:true"]
+
+
 class FakeGtk:
     class Menu:
         def __init__(self) -> None:
@@ -592,6 +633,17 @@ class FakeGtk:
 
         def set_active(self, active: bool) -> None:
             self.active = active
+
+    class CheckMenuItem(MenuItem):
+        def __init__(self, label: str) -> None:
+            super().__init__(label)
+            self.active = False
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def get_active(self) -> bool:
+            return self.active
 
 
 def _wait_for_socket(socket_path: Path) -> None:

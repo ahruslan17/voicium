@@ -17,6 +17,7 @@ from voicium.transcription import (
     model_path,
     resolve_transformers_device,
     transcribe,
+    transformers_generate_kwargs,
 )
 
 
@@ -95,7 +96,7 @@ def test_build_transcribe_command_rejects_huggingface_profile(tmp_path: Path) ->
         )
 
 
-def test_build_transcribe_command_adds_russian_cpu_flags(tmp_path: Path) -> None:
+def test_build_transcribe_command_omits_language_for_auto_detection(tmp_path: Path) -> None:
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"wav")
     binary_path = tmp_path / "whisper-cli"
@@ -105,7 +106,6 @@ def test_build_transcribe_command_adds_russian_cpu_flags(tmp_path: Path) -> None
     command = build_transcribe_command(
         TranscriptionRequest(
             audio_path=audio_path,
-            language="ru",
             profile_name="fast",
             backend="cpu",
             model_dir=tmp_path,
@@ -119,14 +119,33 @@ def test_build_transcribe_command_adds_russian_cpu_flags(tmp_path: Path) -> None
         str(tmp_path / "ggml-small-q5_1.bin"),
         "-f",
         str(audio_path),
-        "-l",
-        "ru",
         "--no-translate",
         "--print-progress",
         "false",
         "--print-timestamps",
         "false",
     ]
+
+
+def test_build_transcribe_command_adds_language_when_explicit(tmp_path: Path) -> None:
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"wav")
+    binary_path = tmp_path / "whisper-cli"
+    binary_path.write_text("binary", encoding="utf-8")
+    model_path("fast", tmp_path).write_text("model", encoding="utf-8")
+
+    command = build_transcribe_command(
+        TranscriptionRequest(
+            audio_path=audio_path,
+            language="en",
+            profile_name="fast",
+            backend="cpu",
+            model_dir=tmp_path,
+            whisper_binary=binary_path,
+        )
+    )
+
+    assert command[-2:] == ["-l", "en"]
 
 
 def test_ensure_model_available_downloads_missing_whisper_cpp_model(
@@ -308,6 +327,18 @@ def test_resolve_transformers_device_uses_cuda_when_available() -> None:
 
     assert resolve_transformers_device("auto", torch_module) == "cuda"
     assert resolve_transformers_device("cpu", torch_module) == "cpu"
+
+
+def test_transformers_generate_kwargs_omits_language_for_auto_detection() -> None:
+    kwargs = transformers_generate_kwargs("auto")
+
+    assert "language" not in kwargs
+
+
+def test_transformers_generate_kwargs_maps_explicit_russian_language() -> None:
+    kwargs = transformers_generate_kwargs("ru")
+
+    assert kwargs["language"] == "russian"
 
 
 def test_cuda_oom_detection() -> None:

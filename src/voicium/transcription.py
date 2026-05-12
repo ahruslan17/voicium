@@ -32,8 +32,8 @@ class ModelProfile:
 @dataclass(frozen=True, slots=True)
 class TranscriptionRequest:
     audio_path: Path
-    language: str = "ru"
-    profile_name: str = "russian"
+    language: str = "auto"
+    profile_name: str = "fast"
     backend: str = "auto"
     model_dir: Path | None = None
     whisper_binary: Path | None = None
@@ -71,7 +71,7 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
     ),
     "accurate": ModelProfile(
         name="accurate",
-        target="NVIDIA GPU",
+        target="multilingual quality",
         source=ModelSource.WHISPER_CPP,
         filename="ggml-large-v3-turbo-q5_0.bin",
         url=(
@@ -178,13 +178,12 @@ def build_transcribe_command(request: TranscriptionRequest) -> list[str]:
         str(model),
         "-f",
         str(request.audio_path),
-        "-l",
-        request.language,
         "--no-translate",
         "--print-progress",
         "false",
         "--print-timestamps",
         "false",
+        *language_args(request.language),
     ]
 
 
@@ -318,17 +317,29 @@ def run_transformers_pipeline(
 ) -> dict[str, object]:
     return asr_pipeline(
         str(request.audio_path),
-        generate_kwargs={
-            "language": "russian" if request.language == "ru" else request.language,
-            "max_new_tokens": 256,
-            "num_beams": 1,
-            "temperature": 0.0,
-            "use_cache": True,
-        },
+        generate_kwargs=transformers_generate_kwargs(request.language),
         return_timestamps=False,
         chunk_length_s=30,
         batch_size=1,
     )
+
+
+def language_args(language: str) -> list[str]:
+    if language == "auto":
+        return []
+    return ["-l", language]
+
+
+def transformers_generate_kwargs(language: str) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "max_new_tokens": 256,
+        "num_beams": 1,
+        "temperature": 0.0,
+        "use_cache": True,
+    }
+    if language != "auto":
+        kwargs["language"] = "russian" if language == "ru" else language
+    return kwargs
 
 
 def resolve_transformers_device(device: str, torch_module: object) -> str:

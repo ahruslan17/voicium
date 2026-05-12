@@ -15,14 +15,16 @@ def test_healthcheck_command_outputs_phase_zero_status(capsys) -> None:
     assert "Config path:" in captured.out
 
 
-def test_config_show_outputs_default_language(capsys) -> None:
+def test_config_show_outputs_default_language(capsys, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("voicium.config.default_config_path", lambda: tmp_path / "missing.toml")
+
     exit_code = main(["config", "show"])
 
     captured = capsys.readouterr()
 
     assert exit_code == 0
     assert "[general]" in captured.out
-    assert 'language = "ru"' in captured.out
+    assert 'language = "auto"' in captured.out
 
 
 def test_transcribe_command_reports_missing_file(capsys) -> None:
@@ -34,7 +36,7 @@ def test_transcribe_command_reports_missing_file(capsys) -> None:
     assert "Audio file not found" in captured.out
 
 
-def test_transcribe_command_defaults_to_russian_profile(capsys, monkeypatch) -> None:
+def test_transcribe_command_defaults_to_fast_profile(capsys, monkeypatch) -> None:
     def fake_transcribe(request) -> str:
         raise TranscriptionError(f"profile={request.profile_name}")
 
@@ -45,7 +47,7 @@ def test_transcribe_command_defaults_to_russian_profile(capsys, monkeypatch) -> 
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "profile=russian" in captured.out
+    assert "profile=fast" in captured.out
 
 
 def test_record_command_reports_invalid_duration(capsys, tmp_path) -> None:

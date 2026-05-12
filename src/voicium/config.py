@@ -16,7 +16,7 @@ class RuntimeMode(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class GeneralConfig:
-    language: str = "ru"
+    language: str = "auto"
     mode: str = "push_to_talk"
     history_enabled: bool = True
     save_audio: bool = False
@@ -132,6 +132,9 @@ class AppConfig:
     def with_audio_input_device(self, input_device: str | None) -> AppConfig:
         return replace(self, audio=replace(self.audio, input_device=input_device))
 
+    def with_auto_paste(self, auto_paste: bool) -> AppConfig:
+        return replace(self, paste=replace(self.paste, auto_paste=auto_paste))
+
 
 def default_config_path() -> Path:
     return Path.home() / ".config" / "voicium" / "config.toml"
@@ -145,7 +148,7 @@ def transcription_for_runtime_mode(
         case RuntimeMode.QUALITY:
             return TranscriptionConfig(
                 backend="auto",
-                model_profile="russian",
+                model_profile="accurate",
                 runtime_mode=RuntimeMode.QUALITY.value,
             )
         case RuntimeMode.FAST:

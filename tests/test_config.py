@@ -10,10 +10,10 @@ from voicium.config import (
 )
 
 
-def test_default_config_is_russian_push_to_talk() -> None:
+def test_default_config_uses_auto_language_push_to_talk() -> None:
     config = AppConfig.default()
 
-    assert config.general.language == "ru"
+    assert config.general.language == "auto"
     assert config.general.mode == "push_to_talk"
     assert config.hotkey.backend == "evdev"
     assert config.audio.input_device is None
@@ -34,7 +34,7 @@ def test_default_config_path_uses_user_config_directory() -> None:
 
 
 def test_transcription_for_runtime_mode_maps_profiles() -> None:
-    assert transcription_for_runtime_mode("quality").model_profile == "russian"
+    assert transcription_for_runtime_mode("quality").model_profile == "accurate"
     assert transcription_for_runtime_mode("fast").model_profile == "fast"
     assert transcription_for_runtime_mode("balanced").model_profile == "balanced"
 
@@ -46,6 +46,7 @@ def test_config_save_and_load_roundtrip(tmp_path: Path) -> None:
         .with_hotkey("KEY_F8")
         .with_runtime_mode("fast")
         .with_audio_input_device("alsa_input.test")
+        .with_auto_paste(True)
     )
 
     save_config(config, path)
@@ -53,6 +54,7 @@ def test_config_save_and_load_roundtrip(tmp_path: Path) -> None:
 
     assert loaded.hotkey.key == "KEY_F8"
     assert loaded.audio.input_device == "alsa_input.test"
+    assert loaded.paste.auto_paste is True
     assert loaded.transcription.runtime_mode == "fast"
     assert loaded.transcription.model_profile == "fast"
 

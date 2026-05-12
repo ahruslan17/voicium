@@ -42,8 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Transcribe a WAV file with local whisper.cpp CPU runtime.",
     )
     transcribe_parser.add_argument("audio_path", type=Path)
-    transcribe_parser.add_argument("--lang", default="ru")
-    transcribe_parser.add_argument("--profile", default="russian")
+    transcribe_parser.add_argument("--lang", default="auto")
+    transcribe_parser.add_argument("--profile", default="fast")
     transcribe_parser.add_argument("--backend", choices=("auto", "cpu", "cuda"), default="auto")
     transcribe_parser.add_argument("--model-dir", type=Path)
     transcribe_parser.add_argument("--whisper-bin", type=Path)
@@ -67,8 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     record_transcribe_parser.add_argument("--duration", type=int, default=5)
     record_transcribe_parser.add_argument("--device")
     record_transcribe_parser.add_argument("--keep-audio", type=Path)
-    record_transcribe_parser.add_argument("--lang", default="ru")
-    record_transcribe_parser.add_argument("--profile", default="russian")
+    record_transcribe_parser.add_argument("--lang", default="auto")
+    record_transcribe_parser.add_argument("--profile", default="fast")
     record_transcribe_parser.add_argument(
         "--backend",
         choices=("auto", "cpu", "cuda"),

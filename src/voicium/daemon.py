@@ -17,7 +17,7 @@ from pathlib import Path
 from voicium.audio import AudioError, AudioInputDevice, StreamingRecorder, list_input_devices
 from voicium.config import AppConfig, RuntimeMode, load_config, save_config
 from voicium.history import HistoryStore
-from voicium.paste import PasteMode, PasteResult, copy_to_clipboard, start_detached_command
+from voicium.paste import PasteMode, PasteResult, insert_or_copy, start_detached_command
 from voicium.postprocess import postprocess_russian
 from voicium.transcription import TranscriptionError, TranscriptionRequest, transcribe
 
@@ -233,6 +233,8 @@ class DaemonService:
                 return self.set_hotkey(command.partition(":")[2])
             case command if command.startswith("set_audio_input:"):
                 return self.set_audio_input(command.partition(":")[2])
+            case command if command.startswith("set_auto_paste:"):
+                return self.set_auto_paste(command.partition(":")[2])
             case _:
                 return DaemonResponse(False, self.state, f"Unknown command: {command}")
 
@@ -278,6 +280,19 @@ class DaemonService:
             self.config = self.config.with_audio_input_device(device)
             save_config(self.config)
             message = f"Audio input set to {device or 'default'}."
+            self._notify_tray(DaemonState.IDLE, message)
+            return DaemonResponse(True, self.state, message)
+
+    def set_auto_paste(self, enabled: str) -> DaemonResponse:
+        value = enabled.strip().lower()
+        if value not in {"true", "false"}:
+            return DaemonResponse(False, self.state, f"Invalid auto-paste value: {enabled}")
+
+        auto_paste = value == "true"
+        with self._lock:
+            self.config = self.config.with_auto_paste(auto_paste)
+            save_config(self.config)
+            message = f"Auto-paste {'enabled' if auto_paste else 'disabled'}."
             self._notify_tray(DaemonState.IDLE, message)
             return DaemonResponse(True, self.state, message)
 
@@ -345,7 +360,7 @@ class DaemonService:
         return StreamingRecorder(audio_path, device=self.config.audio.input_device)
 
     def _default_paste_inserter(self, text: str) -> PasteResult:
-        return copy_to_clipboard(text)
+        return insert_or_copy(text, config=self.config.paste)
 
     def _default_history_writer(
         self,
@@ -550,6 +565,7 @@ def _build_status_icon_menu(gtk: object) -> object:
     _append_hotkey_menu(gtk, menu, config)
     _append_audio_input_menu(gtk, menu, config)
     _append_runtime_mode_menu(gtk, menu, config)
+    _append_paste_menu(gtk, menu, config)
     menu.show_all()
     return menu
 
@@ -646,6 +662,20 @@ def _append_runtime_mode_menu(gtk: object, menu: object, config: AppConfig) -> N
         )
         submenu.append(item)
     parent = gtk.MenuItem(label="Transcription Mode")
+    parent.set_submenu(submenu)
+    menu.append(parent)
+
+
+def _append_paste_menu(gtk: object, menu: object, config: AppConfig) -> None:
+    submenu = gtk.Menu()
+    auto_paste_item = gtk.CheckMenuItem(label="Auto-paste")
+    auto_paste_item.set_active(config.paste.auto_paste)
+    auto_paste_item.connect(
+        "activate",
+        lambda item: _send_tray_command(f"set_auto_paste:{str(item.get_active()).lower()}"),
+    )
+    submenu.append(auto_paste_item)
+    parent = gtk.MenuItem(label="Paste")
     parent.set_submenu(submenu)
     menu.append(parent)
 
