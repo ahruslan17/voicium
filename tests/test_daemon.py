@@ -19,6 +19,9 @@ from voicium.daemon import (
     DaemonService,
     DaemonState,
     TrayEvent,
+    _append_audio_input_menu,
+    _append_hotkey_menu,
+    _append_runtime_mode_menu,
     _apply_tray_event,
     listen_evdev_hotkey,
     send_command,
@@ -172,6 +175,29 @@ def test_daemon_updates_runtime_mode_and_hotkey(tmp_path: Path, monkeypatch) -> 
     assert service.config.transcription.model_profile == "fast"
     assert service.config.hotkey.key == "KEY_F8"
     assert config_path.exists()
+
+
+def test_daemon_updates_audio_input(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    monkeypatch.setattr("voicium.config.default_config_path", lambda: config_path)
+    service = DaemonService(config=AppConfig.default())
+
+    response = service.handle_command("set_audio_input:alsa_input.test")
+
+    assert response.ok is True
+    assert service.config.audio.input_device == "alsa_input.test"
+    assert 'input_device = "alsa_input.test"' in config_path.read_text(encoding="utf-8")
+
+
+def test_daemon_resets_audio_input_to_default(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    monkeypatch.setattr("voicium.config.default_config_path", lambda: config_path)
+    service = DaemonService(config=AppConfig.default().with_audio_input_device("alsa_input.test"))
+
+    response = service.handle_command("set_audio_input:")
+
+    assert response.ok is True
+    assert service.config.audio.input_device is None
 
 
 def test_daemon_reloads_config(tmp_path: Path, monkeypatch) -> None:
@@ -432,6 +458,103 @@ def test_show_transcript_notification_is_best_effort(monkeypatch) -> None:
     show_transcript_notification("готово")
 
     assert calls == [["notify-send", "Voicium transcription", "готово"]]
+
+
+def test_append_audio_input_menu_lists_devices(monkeypatch) -> None:
+    commands: list[str] = []
+    monkeypatch.setattr("voicium.daemon._send_tray_command", commands.append)
+    monkeypatch.setattr(
+        "voicium.daemon.list_input_devices",
+        lambda: [types.SimpleNamespace(name="alsa_input.test", description="Test Mic")],
+    )
+
+    menu = FakeGtk.Menu()
+    _append_audio_input_menu(
+        FakeGtk,
+        menu,
+        AppConfig.default().with_audio_input_device("alsa_input.test"),
+    )
+
+    parent = menu.items[0]
+    submenu = parent.submenu
+    submenu.items[0].activate()
+    submenu.items[1].activate()
+
+    assert parent.label == "Microphone"
+    assert [item.label for item in submenu.items] == ["System default", "Test Mic"]
+    assert [item.active for item in submenu.items] == [False, True]
+    assert commands == ["set_audio_input:", "set_audio_input:alsa_input.test"]
+
+
+def test_append_hotkey_menu_marks_selected_key() -> None:
+    menu = FakeGtk.Menu()
+    _append_hotkey_menu(FakeGtk, menu, AppConfig.default().with_hotkey("KEY_F8"))
+
+    submenu = menu.items[0].submenu
+
+    assert [item.label for item in submenu.items] == [
+        "KEY_RIGHTCTRL",
+        "KEY_LEFTCTRL",
+        "KEY_F8",
+        "KEY_PAUSE",
+        "KEY_RIGHTALT",
+    ]
+    assert [item.active for item in submenu.items] == [False, False, True, False, False]
+
+
+def test_append_runtime_mode_menu_marks_selected_mode() -> None:
+    menu = FakeGtk.Menu()
+    _append_runtime_mode_menu(FakeGtk, menu, AppConfig.default().with_runtime_mode("balanced"))
+
+    submenu = menu.items[0].submenu
+
+    assert [item.label for item in submenu.items] == [
+        "Quality - Transformers",
+        "Fast - whisper.cpp small",
+        "Balanced - whisper.cpp medium",
+    ]
+    assert [item.active for item in submenu.items] == [False, False, True]
+
+
+class FakeGtk:
+    class Menu:
+        def __init__(self) -> None:
+            self.items: list[object] = []
+
+        def append(self, item: object) -> None:
+            self.items.append(item)
+
+    class MenuItem:
+        def __init__(self, label: str) -> None:
+            self.label = label
+            self.submenu: object | None = None
+            self.callback = None
+            self.sensitive = True
+
+        def connect(self, _event: str, callback: object) -> None:
+            self.callback = callback
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+        def set_submenu(self, submenu: object) -> None:
+            self.submenu = submenu
+
+        def activate(self) -> None:
+            self.callback(self)
+
+    class RadioMenuItem(MenuItem):
+        def __init__(self, label: str, group: object | None) -> None:
+            super().__init__(label)
+            self.group = group
+            self.active = False
+
+        @classmethod
+        def new_with_label_from_widget(cls, group: object | None, label: str) -> object:
+            return cls(label, group)
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
 
 
 def _wait_for_socket(socket_path: Path) -> None:

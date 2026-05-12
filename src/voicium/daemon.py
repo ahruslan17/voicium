@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from voicium.audio import AudioError, StreamingRecorder
+from voicium.audio import AudioError, AudioInputDevice, StreamingRecorder, list_input_devices
 from voicium.config import AppConfig, RuntimeMode, load_config, save_config
 from voicium.history import HistoryStore
 from voicium.paste import PasteMode, PasteResult, copy_to_clipboard, start_detached_command
@@ -230,6 +230,8 @@ class DaemonService:
                 return self.set_runtime_mode(command.partition(":")[2])
             case command if command.startswith("set_hotkey:"):
                 return self.set_hotkey(command.partition(":")[2])
+            case command if command.startswith("set_audio_input:"):
+                return self.set_audio_input(command.partition(":")[2])
             case _:
                 return DaemonResponse(False, self.state, f"Unknown command: {command}")
 
@@ -266,6 +268,15 @@ class DaemonService:
             self.config = self.config.with_hotkey(key)
             save_config(self.config)
             message = f"Hotkey set to {key}. Restart daemon to apply listener changes."
+            self._notify_tray(DaemonState.IDLE, message)
+            return DaemonResponse(True, self.state, message)
+
+    def set_audio_input(self, input_device: str) -> DaemonResponse:
+        device = input_device.strip() or None
+        with self._lock:
+            self.config = self.config.with_audio_input_device(device)
+            save_config(self.config)
+            message = f"Audio input set to {device or 'default'}."
             self._notify_tray(DaemonState.IDLE, message)
             return DaemonResponse(True, self.state, message)
 
@@ -510,21 +521,25 @@ def start_status_icon(events: queue.Queue[TrayEvent]) -> None:
 
 
 def _build_status_icon_menu(gtk: object) -> object:
+    config = load_config()
     menu = gtk.Menu()
     status_item = gtk.MenuItem(label="Voicium is running")
     status_item.set_sensitive(False)
     menu.append(status_item)
     menu.append(gtk.SeparatorMenuItem())
-    _append_hotkey_menu(gtk, menu)
-    _append_runtime_mode_menu(gtk, menu)
+    _append_hotkey_menu(gtk, menu, config)
+    _append_audio_input_menu(gtk, menu, config)
+    _append_runtime_mode_menu(gtk, menu, config)
     menu.show_all()
     return menu
 
 
-def _append_hotkey_menu(gtk: object, menu: object) -> None:
+def _append_hotkey_menu(gtk: object, menu: object, config: AppConfig) -> None:
     submenu = gtk.Menu()
+    group = None
     for key in ("KEY_RIGHTCTRL", "KEY_LEFTCTRL", "KEY_F8", "KEY_PAUSE", "KEY_RIGHTALT"):
-        item = gtk.MenuItem(label=key)
+        item = _choice_menu_item(gtk, key, group=group, selected=key == config.hotkey.key)
+        group = group or item
         item.connect(
             "activate", lambda _item, selected=key: _send_tray_command(f"set_hotkey:{selected}")
         )
@@ -534,15 +549,77 @@ def _append_hotkey_menu(gtk: object, menu: object) -> None:
     menu.append(parent)
 
 
-def _append_runtime_mode_menu(gtk: object, menu: object) -> None:
+def _append_audio_input_menu(gtk: object, menu: object, config: AppConfig) -> None:
+    submenu = gtk.Menu()
+    group = None
+    default_item = _choice_menu_item(
+        gtk,
+        "System default",
+        group=group,
+        selected=config.audio.input_device is None,
+    )
+    group = default_item
+    default_item.connect("activate", lambda _item: _send_tray_command("set_audio_input:"))
+    submenu.append(default_item)
+
+    try:
+        devices = list_input_devices()
+    except AudioError as error:
+        item = gtk.MenuItem(label=f"Unavailable: {error}")
+        item.set_sensitive(False)
+        submenu.append(item)
+    else:
+        _append_audio_input_devices(gtk, submenu, devices, config, group)
+
+    parent = gtk.MenuItem(label="Microphone")
+    parent.set_submenu(submenu)
+    menu.append(parent)
+
+
+def _append_audio_input_devices(
+    gtk: object,
+    submenu: object,
+    devices: list[AudioInputDevice],
+    config: AppConfig,
+    group: object,
+) -> None:
+    if not devices:
+        item = gtk.MenuItem(label="No input devices found")
+        item.set_sensitive(False)
+        submenu.append(item)
+        return
+
+    for device in devices:
+        label = device.description if device.description != device.name else device.name
+        item = _choice_menu_item(
+            gtk,
+            label,
+            group=group,
+            selected=device.name == config.audio.input_device,
+        )
+        item.connect(
+            "activate",
+            lambda _item, selected=device.name: _send_tray_command(f"set_audio_input:{selected}"),
+        )
+        submenu.append(item)
+
+
+def _append_runtime_mode_menu(gtk: object, menu: object, config: AppConfig) -> None:
     submenu = gtk.Menu()
     labels = {
         RuntimeMode.QUALITY.value: "Quality - Transformers",
         RuntimeMode.FAST.value: "Fast - whisper.cpp small",
         RuntimeMode.BALANCED.value: "Balanced - whisper.cpp medium",
     }
+    group = None
     for runtime_mode, label in labels.items():
-        item = gtk.MenuItem(label=label)
+        item = _choice_menu_item(
+            gtk,
+            label,
+            group=group,
+            selected=runtime_mode == config.transcription.runtime_mode,
+        )
+        group = group or item
         item.connect(
             "activate",
             lambda _item, selected=runtime_mode: _send_tray_command(f"set_runtime_mode:{selected}"),
@@ -551,6 +628,12 @@ def _append_runtime_mode_menu(gtk: object, menu: object) -> None:
     parent = gtk.MenuItem(label="Transcription Mode")
     parent.set_submenu(submenu)
     menu.append(parent)
+
+
+def _choice_menu_item(gtk: object, label: str, *, group: object | None, selected: bool) -> object:
+    item = gtk.RadioMenuItem.new_with_label_from_widget(group, label)
+    item.set_active(selected)
+    return item
 
 
 def _send_tray_command(command: str) -> None:

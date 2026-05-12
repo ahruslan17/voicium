@@ -129,6 +129,9 @@ class AppConfig:
     def with_hotkey(self, key: str) -> AppConfig:
         return replace(self, hotkey=replace(self.hotkey, key=key))
 
+    def with_audio_input_device(self, input_device: str | None) -> AppConfig:
+        return replace(self, audio=replace(self.audio, input_device=input_device))
+
 
 def default_config_path() -> Path:
     return Path.home() / ".config" / "voicium" / "config.toml"

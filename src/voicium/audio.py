@@ -46,21 +46,56 @@ def list_input_devices(*, command_runner: CommandRunner | None = None) -> list[A
         )
 
     runner = command_runner or run_command
-    result = runner(["pactl", "list", "short", "sources"])
+    result = runner(["pactl", "list", "sources"])
     if result.returncode != 0:
         details = result.stderr or result.stdout or "pactl failed"
         raise AudioError(f"Unable to list input devices: {details}")
 
+    return parse_pactl_sources(result.stdout)
+
+
+def parse_pactl_sources(output: str) -> list[AudioInputDevice]:
     devices: list[AudioInputDevice] = []
-    for line in result.stdout.splitlines():
+    current_name: str | None = None
+    current_description: str | None = None
+
+    def append_current() -> None:
+        if current_name is None or current_name.endswith(".monitor"):
+            return
+        devices.append(
+            AudioInputDevice(
+                name=current_name,
+                description=current_description or current_name,
+            )
+        )
+
+    for line in output.splitlines():
+        if line.startswith("Source #"):
+            append_current()
+            current_name = None
+            current_description = None
+            continue
+
+        stripped = line.strip()
+        if stripped.startswith("Name:"):
+            current_name = stripped.partition(":")[2].strip()
+        elif stripped.startswith("Description:"):
+            current_description = stripped.partition(":")[2].strip()
+
+    append_current()
+    if devices:
+        return devices
+
+    # Older PulseAudio-compatible implementations can return the short table even for tests or
+    # stripped environments. Keep parsing it as a fallback, but prefer detailed descriptions above.
+    for line in output.splitlines():
         parts = line.split("\t")
         if len(parts) < 2:
             continue
         name = parts[1]
         if name.endswith(".monitor"):
             continue
-        description = parts[2] if len(parts) > 2 else name
-        devices.append(AudioInputDevice(name=name, description=description))
+        devices.append(AudioInputDevice(name=name, description=name))
     return devices
 
 

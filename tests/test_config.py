@@ -41,12 +41,18 @@ def test_transcription_for_runtime_mode_maps_profiles() -> None:
 
 def test_config_save_and_load_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
-    config = AppConfig.default().with_hotkey("KEY_F8").with_runtime_mode("fast")
+    config = (
+        AppConfig.default()
+        .with_hotkey("KEY_F8")
+        .with_runtime_mode("fast")
+        .with_audio_input_device("alsa_input.test")
+    )
 
     save_config(config, path)
     loaded = load_config(path)
 
     assert loaded.hotkey.key == "KEY_F8"
+    assert loaded.audio.input_device == "alsa_input.test"
     assert loaded.transcription.runtime_mode == "fast"
     assert loaded.transcription.model_profile == "fast"
 
