@@ -274,6 +274,40 @@ def test_daemon_reloads_config(tmp_path: Path, monkeypatch) -> None:
     assert service.config.transcription.model_profile == "balanced"
 
 
+def test_daemon_uses_saved_settings_before_transcription(tmp_path: Path) -> None:
+    requests: list[TranscriptionRequest] = []
+    current_config = AppConfig.default()
+
+    def recorder_factory(path: Path) -> StreamingRecorder:
+        def process_factory(_args: list[str]) -> FakeProcess:
+            path.write_bytes(b"wav")
+            return FakeProcess()
+
+        return StreamingRecorder(path, process_factory=process_factory)
+
+    def config_loader() -> AppConfig:
+        return current_config
+
+    def transcriber(request: TranscriptionRequest) -> str:
+        requests.append(request)
+        return "привет"
+
+    service = DaemonService(
+        config_loader=config_loader,
+        recorder_factory=recorder_factory,
+        transcriber=transcriber,
+        paste_inserter=lambda _text: PasteResult(PasteMode.COPIED, "copied"),
+        history_writer=lambda _text, _raw, _result: None,
+    )
+
+    current_config = AppConfig.default().with_runtime_mode("balanced")
+    service.handle_command(DaemonCommand.START_RECORDING.value)
+    service.handle_command(DaemonCommand.STOP_RECORDING.value)
+    _wait_for_state(service, DaemonState.IDLE)
+
+    assert requests[0].profile_name == "balanced"
+
+
 def test_daemon_returns_error_when_paste_fails(tmp_path: Path) -> None:
     def recorder_factory(path: Path) -> StreamingRecorder:
         def process_factory(_args: list[str]) -> FakeProcess:

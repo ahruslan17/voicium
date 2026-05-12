@@ -24,7 +24,7 @@ def test_config_show_outputs_default_language(capsys, monkeypatch, tmp_path) -> 
 
     assert exit_code == 0
     assert "[general]" in captured.out
-    assert 'language = "auto"' in captured.out
+    assert 'language = "ru"' in captured.out
 
 
 def test_transcribe_command_reports_missing_file(capsys) -> None:

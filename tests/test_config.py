@@ -13,7 +13,7 @@ from voicium.config import (
 def test_default_config_uses_auto_language_push_to_talk() -> None:
     config = AppConfig.default()
 
-    assert config.general.language == "auto"
+    assert config.general.language == "ru"
     assert config.general.mode == "push_to_talk"
     assert config.hotkey.backend == "evdev"
     assert config.audio.input_device is None

@@ -78,6 +78,7 @@ Transcriber = Callable[[TranscriptionRequest], str]
 PasteInserter = Callable[[str], PasteResult]
 HistoryWriter = Callable[[str, str | None, PasteResult], None]
 TrayStarter = Callable[[queue.Queue[TrayEvent]], object]
+ConfigLoader = Callable[[], AppConfig]
 
 
 def default_runtime_dir() -> Path:
@@ -103,8 +104,10 @@ class DaemonService:
         history_writer: HistoryWriter | None = None,
         hotkey_listener: HotkeyListener | None = None,
         tray_starter: TrayStarter | None = None,
+        config_loader: ConfigLoader | None = None,
     ) -> None:
-        self.config = config or AppConfig.default()
+        self.config_loader = config_loader or load_config
+        self.config = config or self.config_loader()
         self.socket_path = socket_path or default_socket_path()
         self.recorder_factory = recorder_factory or self._default_recorder_factory
         self.transcriber = transcriber or transcribe
@@ -123,6 +126,7 @@ class DaemonService:
     def start_recording(self) -> DaemonResponse:
         started_at = time.perf_counter()
         with self._lock:
+            self.config = self.config_loader()
             if self.state == DaemonState.RECORDING:
                 return DaemonResponse(True, self.state, "Recording already active.")
             if self.state != DaemonState.IDLE:
@@ -169,6 +173,7 @@ class DaemonService:
     def _process_recording(self, audio_path: Path) -> None:
         total_started_at = time.perf_counter()
         try:
+            self.config = self.config_loader()
             transcribe_started_at = time.perf_counter()
             raw_transcript = self._transcribe_audio(audio_path)
             log_timing("pipeline.transcribe", transcribe_started_at)
@@ -240,7 +245,7 @@ class DaemonService:
 
     def reload_config(self) -> DaemonResponse:
         with self._lock:
-            self.config = load_config()
+            self.config = self.config_loader()
             message = (
                 "Config reloaded. "
                 f"hotkey={self.config.hotkey.key}, "

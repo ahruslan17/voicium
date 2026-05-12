@@ -89,12 +89,11 @@ def discover_whisper_binary(
             return explicit_binary
         raise BackendError(f"whisper.cpp binary not found: {explicit_binary}")
 
-    commands = (
-        ("whisper-cuda", "whisper-cli-cuda", "whisper-cli")
-        if backend == BackendName.CUDA
-        else ("whisper-cli", "whisper.cpp", "main")
-    )
-    for command in commands:
+    packaged_binary = packaged_whisper_binary()
+    if backend == BackendName.CPU and packaged_binary.exists():
+        return packaged_binary
+
+    for command in whisper_binary_candidates(backend):
         found = shutil.which(command)
         if found is not None:
             return Path(found)
@@ -108,6 +107,16 @@ def discover_whisper_binary(
         "whisper.cpp binary not found. Install whisper.cpp and expose whisper-cli in PATH, "
         "or pass --whisper-bin."
     )
+
+
+def whisper_binary_candidates(backend: BackendName) -> tuple[str, ...]:
+    if backend == BackendName.CUDA:
+        return ("whisper-cuda", "whisper-cli-cuda", "whisper-cli")
+    return ("whisper-cli", "whisper.cpp", "main")
+
+
+def packaged_whisper_binary() -> Path:
+    return Path("/usr/lib/voicium/bin/whisper-cli")
 
 
 def select_backend(

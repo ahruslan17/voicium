@@ -59,8 +59,8 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         name="fast",
         target="CPU / lowest latency",
         source=ModelSource.WHISPER_CPP,
-        filename="ggml-small-q5_1.bin",
-        url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+        filename="ggml-tiny-q5_1.bin",
+        url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin",
     ),
     "balanced": ModelProfile(
         name="balanced",
@@ -178,11 +178,9 @@ def build_transcribe_command(request: TranscriptionRequest) -> list[str]:
         str(model),
         "-f",
         str(request.audio_path),
-        "--no-translate",
-        "--print-progress",
-        "false",
-        "--print-timestamps",
-        "false",
+        "-np",
+        "-nt",
+        *fast_decode_args(profile.name),
         *language_args(request.language),
     ]
 
@@ -203,7 +201,7 @@ def transcribe(
         details = result.stderr or result.stdout or "whisper.cpp failed"
         raise TranscriptionError(f"Transcription failed: {details}")
 
-    text = result.stdout.strip()
+    text = clean_whisper_output(result.stdout)
     if not text:
         raise TranscriptionError("Transcription produced empty output.")
     return text
@@ -217,6 +215,18 @@ def ensure_model_available(profile_name: str, model_dir: Path | None = None) -> 
     if profile.source == ModelSource.HUGGINGFACE:
         return path
     return download_model(profile.name, model_dir=model_dir)
+
+
+def clean_whisper_output(output: str) -> str:
+    lines = [line.strip() for line in output.splitlines()]
+    text = " ".join(line for line in lines if line and line != "[BLANK_AUDIO]").strip()
+    return " ".join(text.split())
+
+
+def fast_decode_args(profile_name: str) -> list[str]:
+    if profile_name == "fast":
+        return ["-nf"]
+    return []
 
 
 def transcribe_with_transformers(request: TranscriptionRequest) -> str:
@@ -325,9 +335,8 @@ def run_transformers_pipeline(
 
 
 def language_args(language: str) -> list[str]:
-    if language == "auto":
-        return []
-    return ["-l", language]
+    selected_language = "ru" if language == "auto" else language
+    return ["-l", selected_language]
 
 
 def transformers_generate_kwargs(language: str) -> dict[str, object]:

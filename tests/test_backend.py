@@ -47,7 +47,18 @@ def test_discover_cuda_binary_prefers_cuda_specific_command(monkeypatch) -> None
     assert discover_whisper_binary(BackendName.CUDA) == Path("/usr/bin/whisper-cuda")
 
 
+def test_discover_cpu_binary_prefers_packaged_binary(monkeypatch, tmp_path: Path) -> None:
+    packaged_binary = tmp_path / "whisper-cli"
+    packaged_binary.touch()
+    monkeypatch.setattr("voicium.backend.packaged_whisper_binary", lambda: packaged_binary)
+    monkeypatch.setattr("shutil.which", lambda command: "/usr/bin/whisper-cli")
+
+    assert discover_whisper_binary(BackendName.CPU) == packaged_binary
+
+
 def test_select_backend_auto_falls_back_to_cpu_when_nvidia_fails(monkeypatch) -> None:
+    monkeypatch.setattr("voicium.backend.packaged_whisper_binary", lambda: Path("/missing"))
+
     def which(command: str) -> str | None:
         if command == "nvidia-smi":
             return "/usr/bin/nvidia-smi"

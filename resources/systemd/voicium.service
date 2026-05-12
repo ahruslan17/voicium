@@ -4,7 +4,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/voicium daemon
+ExecStart=/usr/bin/voicium daemon
 Restart=on-failure
 RestartSec=2
 

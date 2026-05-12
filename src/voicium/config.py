@@ -16,7 +16,7 @@ class RuntimeMode(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class GeneralConfig:
-    language: str = "auto"
+    language: str = "ru"
     mode: str = "push_to_talk"
     history_enabled: bool = True
     save_audio: bool = False
