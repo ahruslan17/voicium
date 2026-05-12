@@ -29,6 +29,11 @@ class HotkeyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class AudioConfig:
+    input_device: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TranscriptionConfig:
     backend: str = "auto"
     model_profile: str = "russian"
@@ -66,6 +71,7 @@ class RussianConfig:
 class AppConfig:
     general: GeneralConfig
     hotkey: HotkeyConfig
+    audio: AudioConfig
     transcription: TranscriptionConfig
     paste: PasteConfig
     russian: RussianConfig
@@ -75,6 +81,7 @@ class AppConfig:
         return cls(
             general=GeneralConfig(),
             hotkey=HotkeyConfig(),
+            audio=AudioConfig(),
             transcription=TranscriptionConfig(),
             paste=PasteConfig(),
             russian=RussianConfig(replacements=DEFAULT_REPLACEMENTS),
@@ -92,6 +99,9 @@ class AppConfig:
                 "[hotkey]",
                 f'backend = "{self.hotkey.backend}"',
                 f'key = "{self.hotkey.key}"',
+                "",
+                "[audio]",
+                _optional_toml_string("input_device", self.audio.input_device),
                 "",
                 "[transcription]",
                 f'backend = "{self.transcription.backend}"',
@@ -158,6 +168,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     default = AppConfig.default()
     general_data = data.get("general", {})
     hotkey_data = data.get("hotkey", {})
+    audio_data = data.get("audio", {})
     transcription_data = data.get("transcription", {})
     paste_data = data.get("paste", {})
     russian_data = data.get("russian", {})
@@ -188,6 +199,7 @@ def load_config(path: Path | None = None) -> AppConfig:
             backend=str(hotkey_data.get("backend", default.hotkey.backend)),
             key=str(hotkey_data.get("key", default.hotkey.key)),
         ),
+        audio=AudioConfig(input_device=_optional_string(audio_data.get("input_device"))),
         transcription=transcription,
         paste=PasteConfig(
             auto_paste=bool(paste_data.get("auto_paste", default.paste.auto_paste)),
@@ -211,3 +223,17 @@ def save_config(config: AppConfig, path: Path | None = None) -> Path:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(config.to_toml(), encoding="utf-8")
     return config_path
+
+
+def _optional_string(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _optional_toml_string(key: str, value: str | None) -> str:
+    if value is None:
+        return f'{key} = ""'
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'{key} = "{escaped}"'

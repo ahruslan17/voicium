@@ -24,7 +24,16 @@ uv run voicium healthcheck
 uv run voicium config show
 ```
 
+Build the Ubuntu package:
+
+```bash
+./scripts/build-deb.sh
+```
+
+The `.deb` artifact is written to `dist/deb/`.
+
 See the detailed MVP plan:
 
 - [docs/ubuntu-mvp-plan.md](docs/ubuntu-mvp-plan.md)
 - [docs/ubuntu-advanced-architecture.md](docs/ubuntu-advanced-architecture.md)
+- [docs/ubuntu-release-candidate.md](docs/ubuntu-release-candidate.md)

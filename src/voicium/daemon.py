@@ -326,7 +326,7 @@ class DaemonService:
                 return self._fail(str(error))
 
     def _default_recorder_factory(self, audio_path: Path) -> StreamingRecorder:
-        return StreamingRecorder(audio_path)
+        return StreamingRecorder(audio_path, device=self.config.audio.input_device)
 
     def _default_paste_inserter(self, text: str) -> PasteResult:
         return copy_to_clipboard(text)

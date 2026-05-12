@@ -43,11 +43,12 @@ build-wheel:
       - dist/
     expire_in: 1 week
 
-package-deb-placeholder:
+package-deb:
   stage: package
   script:
-    - mkdir -p dist/deb
-    - printf 'Phase 9 will build the Ubuntu .deb package here.\n' > dist/deb/README.txt
+    - apt-get update
+    - apt-get install -y --no-install-recommends dpkg-dev python3-venv
+    - ./scripts/build-deb.sh
   artifacts:
     paths:
       - dist/deb/

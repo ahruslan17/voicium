@@ -16,6 +16,7 @@ def test_default_config_is_russian_push_to_talk() -> None:
     assert config.general.language == "ru"
     assert config.general.mode == "push_to_talk"
     assert config.hotkey.backend == "evdev"
+    assert config.audio.input_device is None
     assert config.transcription.backend == "auto"
     assert config.transcription.model_profile == "russian"
     assert config.transcription.runtime_mode == RuntimeMode.QUALITY.value
@@ -48,3 +49,21 @@ def test_config_save_and_load_roundtrip(tmp_path: Path) -> None:
     assert loaded.hotkey.key == "KEY_F8"
     assert loaded.transcription.runtime_mode == "fast"
     assert loaded.transcription.model_profile == "fast"
+
+
+def test_config_loads_audio_input_device(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "\n".join(
+            [
+                "[audio]",
+                'input_device = "alsa_input.usb-test.analog-stereo"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_config(path)
+
+    assert loaded.audio.input_device == "alsa_input.usb-test.analog-stereo"

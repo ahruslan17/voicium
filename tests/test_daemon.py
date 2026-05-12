@@ -100,6 +100,22 @@ def test_default_daemon_paste_inserter_disables_auto_paste(monkeypatch) -> None:
     assert calls == ["привет"]
 
 
+def test_default_daemon_recorder_uses_configured_audio_device() -> None:
+    config = AppConfig.default()
+    config = type(config)(
+        general=config.general,
+        hotkey=config.hotkey,
+        audio=type(config.audio)(input_device="alsa_input.test"),
+        transcription=config.transcription,
+        paste=config.paste,
+        russian=config.russian,
+    )
+
+    recorder = DaemonService(config=config)._default_recorder_factory(Path("recording.wav"))
+
+    assert recorder.device == "alsa_input.test"
+
+
 def test_daemon_postprocesses_transcript_before_paste(tmp_path: Path) -> None:
     pasted: list[str] = []
 

@@ -938,6 +938,8 @@ Acceptance:
 
 Goal: optional text cleanup via compatible API.
 
+Status: deferred for the first release candidate. Local transcription and insertion remain the release-critical path.
+
 Tasks:
 
 - implement provider client;
@@ -993,6 +995,8 @@ Tasks:
 - add Wayland troubleshooting docs;
 - document tray settings, hotkey setup, and transcription mode tradeoffs;
 - add release checklist.
+
+Current RC scope note: live hotkey rebinding without daemon restart is deferred. The selected hotkey is persisted immediately, but the evdev listener applies it after daemon restart.
 
 Acceptance:
 
