@@ -18,8 +18,8 @@ def test_default_config_uses_auto_language_push_to_talk() -> None:
     assert config.hotkey.backend == "evdev"
     assert config.audio.input_device is None
     assert config.transcription.backend == "auto"
-    assert config.transcription.model_profile == "fast"
-    assert config.transcription.runtime_mode == RuntimeMode.FAST.value
+    assert config.transcription.model_profile == "small-q8_0"
+    assert config.transcription.runtime_mode == RuntimeMode.SMALL_Q8_0.value
     assert config.paste.auto_paste is False
     assert config.paste.fallback_to_clipboard is True
     assert config.russian.replacements["опенкод"] == "OpenCode"
@@ -34,9 +34,10 @@ def test_default_config_path_uses_user_config_directory() -> None:
 
 
 def test_transcription_for_runtime_mode_maps_profiles() -> None:
-    assert transcription_for_runtime_mode("quality").model_profile == "accurate"
-    assert transcription_for_runtime_mode("fast").model_profile == "fast"
-    assert transcription_for_runtime_mode("balanced").model_profile == "balanced"
+    assert transcription_for_runtime_mode("quality").model_profile == "large-v3-turbo-q5_0"
+    assert transcription_for_runtime_mode("small-q8_0").model_profile == "small-q8_0"
+    assert transcription_for_runtime_mode("small").model_profile == "small"
+    assert transcription_for_runtime_mode("medium-q5_0").model_profile == "medium-q5_0"
 
 
 def test_config_save_and_load_roundtrip(tmp_path: Path) -> None:
@@ -44,7 +45,7 @@ def test_config_save_and_load_roundtrip(tmp_path: Path) -> None:
     config = (
         AppConfig.default()
         .with_hotkey("KEY_F8")
-        .with_runtime_mode("fast")
+        .with_runtime_mode("small-q8_0")
         .with_audio_input_device("alsa_input.test")
         .with_auto_paste(True)
     )
@@ -55,8 +56,8 @@ def test_config_save_and_load_roundtrip(tmp_path: Path) -> None:
     assert loaded.hotkey.key == "KEY_F8"
     assert loaded.audio.input_device == "alsa_input.test"
     assert loaded.paste.auto_paste is True
-    assert loaded.transcription.runtime_mode == "fast"
-    assert loaded.transcription.model_profile == "fast"
+    assert loaded.transcription.runtime_mode == "small-q8_0"
+    assert loaded.transcription.model_profile == "small-q8_0"
 
 
 def test_config_loads_audio_input_device(tmp_path: Path) -> None:

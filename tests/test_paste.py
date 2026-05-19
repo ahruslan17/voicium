@@ -10,6 +10,7 @@ from voicium.paste import (
     PasteMode,
     PasteResult,
     copy_to_clipboard,
+    is_terminal_window_class,
     notify_paste_result,
     run_command,
     select_paste_backend,
@@ -98,6 +99,56 @@ def test_auto_paste_disabled_copies_only() -> None:
 
     assert result.mode == PasteMode.COPIED
     assert calls == [(("wl-copy",), "привет")]
+
+
+def test_x11_terminal_uses_ctrl_shift_v() -> None:
+    calls: list[tuple[tuple[str, ...], str | None]] = []
+
+    def runner(args: Sequence[str], input_text: str | None) -> CommandResult:
+        calls.append((tuple(args), input_text))
+        if tuple(args) == ("xdotool", "getactivewindow", "getwindowclassname"):
+            return CommandResult(0, "gnome-terminal", "")
+        return CommandResult(0, "", "")
+
+    manager = PasteManager(
+        config=PasteConfig(auto_paste=True),
+        env={"XDG_SESSION_TYPE": "x11"},
+        command_runner=runner,
+        tool_finder=lambda tool: f"/usr/bin/{tool}" if tool in {"xclip", "xdotool"} else None,
+    )
+
+    result = manager.insert_or_copy("привет")
+
+    assert result.mode == PasteMode.PASTED
+    assert (("xdotool", "key", "ctrl+shift+v"), None) in calls
+
+
+def test_x11_non_terminal_uses_ctrl_v() -> None:
+    calls: list[tuple[tuple[str, ...], str | None]] = []
+
+    def runner(args: Sequence[str], input_text: str | None) -> CommandResult:
+        calls.append((tuple(args), input_text))
+        if tuple(args) == ("xdotool", "getactivewindow", "getwindowclassname"):
+            return CommandResult(0, "firefox", "")
+        return CommandResult(0, "", "")
+
+    manager = PasteManager(
+        config=PasteConfig(auto_paste=True),
+        env={"XDG_SESSION_TYPE": "x11"},
+        command_runner=runner,
+        tool_finder=lambda tool: f"/usr/bin/{tool}" if tool in {"xclip", "xdotool"} else None,
+    )
+
+    result = manager.insert_or_copy("привет")
+
+    assert result.mode == PasteMode.PASTED
+    assert (("xdotool", "key", "ctrl+v"), None) in calls
+
+
+def test_terminal_window_class_detection() -> None:
+    assert is_terminal_window_class("gnome-terminal") is True
+    assert is_terminal_window_class("xfce4-terminal") is True
+    assert is_terminal_window_class("firefox") is False
 
 
 def test_run_command_converts_timeout_to_result(monkeypatch) -> None:

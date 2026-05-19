@@ -26,17 +26,18 @@ def teardown_function() -> None:
 
 
 def test_model_profiles_include_phase_two_profiles() -> None:
-    assert get_model_profile("fast").filename == "ggml-tiny-q5_1.bin"
-    assert get_model_profile("balanced").filename == "ggml-medium-q5_0.bin"
-    assert get_model_profile("accurate").filename == "ggml-large-v3-turbo-q5_0.bin"
+    assert get_model_profile("small-q8_0").filename == "ggml-small-q8_0.bin"
+    assert get_model_profile("small").filename == "ggml-small.bin"
+    assert get_model_profile("medium-q5_0").filename == "ggml-medium-q5_0.bin"
+    assert get_model_profile("large-v3-turbo-q5_0").filename == "ggml-large-v3-turbo-q5_0.bin"
     assert get_model_profile("russian").source == ModelSource.HUGGINGFACE
     assert get_model_profile("russian").model_id == "antony66/whisper-large-v3-russian"
 
 
 def test_model_path_uses_profile_filename(tmp_path: Path) -> None:
-    path = model_path("fast", tmp_path)
+    path = model_path("small-q8_0", tmp_path)
 
-    assert path == tmp_path / "ggml-tiny-q5_1.bin"
+    assert path == tmp_path / "ggml-small-q8_0.bin"
 
 
 def test_model_path_uses_huggingface_model_id(tmp_path: Path) -> None:
@@ -53,10 +54,10 @@ def test_download_model_uses_profile_url_and_destination(tmp_path: Path) -> None
         destination.write_text("model", encoding="utf-8")
         return None
 
-    path = download_model("fast", model_dir=tmp_path, downloader=downloader)
+    path = download_model("small-q8_0", model_dir=tmp_path, downloader=downloader)
 
-    assert path == tmp_path / "ggml-tiny-q5_1.bin"
-    assert calls == [(get_model_profile("fast").url, path)]
+    assert path == tmp_path / "ggml-small-q8_0.bin"
+    assert calls == [(get_model_profile("small-q8_0").url, path)]
 
 
 def test_download_model_uses_huggingface_model_id(tmp_path: Path) -> None:
@@ -101,12 +102,12 @@ def test_build_transcribe_command_defaults_to_russian(tmp_path: Path) -> None:
     audio_path.write_bytes(b"wav")
     binary_path = tmp_path / "whisper-cli"
     binary_path.write_text("binary", encoding="utf-8")
-    model_path("fast", tmp_path).write_text("model", encoding="utf-8")
+    model_path("small-q8_0", tmp_path).write_text("model", encoding="utf-8")
 
     command = build_transcribe_command(
         TranscriptionRequest(
             audio_path=audio_path,
-            profile_name="fast",
+            profile_name="small-q8_0",
             backend="cpu",
             model_dir=tmp_path,
             whisper_binary=binary_path,
@@ -116,7 +117,7 @@ def test_build_transcribe_command_defaults_to_russian(tmp_path: Path) -> None:
     assert command == [
         str(binary_path),
         "-m",
-        str(tmp_path / "ggml-tiny-q5_1.bin"),
+        str(tmp_path / "ggml-small-q8_0.bin"),
         "-f",
         str(audio_path),
         "-np",
@@ -132,13 +133,13 @@ def test_build_transcribe_command_adds_language_when_explicit(tmp_path: Path) ->
     audio_path.write_bytes(b"wav")
     binary_path = tmp_path / "whisper-cli"
     binary_path.write_text("binary", encoding="utf-8")
-    model_path("fast", tmp_path).write_text("model", encoding="utf-8")
+    model_path("small-q8_0", tmp_path).write_text("model", encoding="utf-8")
 
     command = build_transcribe_command(
         TranscriptionRequest(
             audio_path=audio_path,
             language="en",
-            profile_name="fast",
+            profile_name="small-q8_0",
             backend="cpu",
             model_dir=tmp_path,
             whisper_binary=binary_path,
@@ -153,13 +154,13 @@ def test_build_transcribe_command_maps_auto_to_russian(tmp_path: Path) -> None:
     audio_path.write_bytes(b"wav")
     binary_path = tmp_path / "whisper-cli"
     binary_path.write_text("binary", encoding="utf-8")
-    model_path("fast", tmp_path).write_text("model", encoding="utf-8")
+    model_path("small-q8_0", tmp_path).write_text("model", encoding="utf-8")
 
     command = build_transcribe_command(
         TranscriptionRequest(
             audio_path=audio_path,
             language="auto",
-            profile_name="fast",
+            profile_name="small-q8_0",
             backend="cpu",
             model_dir=tmp_path,
             whisper_binary=binary_path,
@@ -182,10 +183,10 @@ def test_ensure_model_available_downloads_missing_whisper_cpp_model(
 
     monkeypatch.setattr("voicium.transcription.download_model", fake_download)
 
-    path = ensure_model_available("fast", tmp_path)
+    path = ensure_model_available("small-q8_0", tmp_path)
 
-    assert path == tmp_path / "ggml-tiny-q5_1.bin"
-    assert downloaded == [("fast", tmp_path)]
+    assert path == tmp_path / "ggml-small-q8_0.bin"
+    assert downloaded == [("small-q8_0", tmp_path)]
 
 
 def test_build_transcribe_command_downloads_missing_model(monkeypatch, tmp_path: Path) -> None:
@@ -204,13 +205,13 @@ def test_build_transcribe_command_downloads_missing_model(monkeypatch, tmp_path:
     command = build_transcribe_command(
         TranscriptionRequest(
             audio_path=audio_path,
-            profile_name="fast",
+            profile_name="small-q8_0",
             model_dir=tmp_path,
             whisper_binary=binary_path,
         )
     )
 
-    assert str(tmp_path / "ggml-tiny-q5_1.bin") in command
+    assert str(tmp_path / "ggml-small-q8_0.bin") in command
 
 
 def test_build_transcribe_command_fails_clearly_when_cuda_unavailable(
@@ -219,13 +220,13 @@ def test_build_transcribe_command_fails_clearly_when_cuda_unavailable(
     monkeypatch.setattr("shutil.which", lambda command: None)
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"wav")
-    model_path("fast", tmp_path).write_text("model", encoding="utf-8")
+    model_path("small-q8_0", tmp_path).write_text("model", encoding="utf-8")
 
     with pytest.raises(TranscriptionError, match="nvidia-smi not found"):
         build_transcribe_command(
             TranscriptionRequest(
                 audio_path=audio_path,
-                profile_name="fast",
+                profile_name="small-q8_0",
                 backend="cuda",
                 model_dir=tmp_path,
             )
@@ -237,7 +238,7 @@ def test_transcribe_returns_whisper_output(tmp_path: Path) -> None:
     audio_path.write_bytes(b"wav")
     binary_path = tmp_path / "whisper-cli"
     binary_path.write_text("binary", encoding="utf-8")
-    model_path("fast", tmp_path).write_text("model", encoding="utf-8")
+    model_path("small-q8_0", tmp_path).write_text("model", encoding="utf-8")
 
     def runner(_command: list[str]) -> CommandResult:
         return CommandResult(returncode=0, stdout="привет мир", stderr="")
@@ -245,7 +246,7 @@ def test_transcribe_returns_whisper_output(tmp_path: Path) -> None:
     text = transcribe(
         TranscriptionRequest(
             audio_path=audio_path,
-            profile_name="fast",
+            profile_name="small-q8_0",
             model_dir=tmp_path,
             whisper_binary=binary_path,
         ),
@@ -260,7 +261,7 @@ def test_transcribe_treats_blank_audio_token_as_empty(tmp_path: Path) -> None:
     audio_path.write_bytes(b"wav")
     binary_path = tmp_path / "whisper-cli"
     binary_path.write_text("binary", encoding="utf-8")
-    model_path("fast", tmp_path).write_text("model", encoding="utf-8")
+    model_path("small-q8_0", tmp_path).write_text("model", encoding="utf-8")
 
     def runner(_command: list[str]) -> CommandResult:
         return CommandResult(returncode=0, stdout="\n [BLANK_AUDIO]", stderr="")
@@ -269,7 +270,7 @@ def test_transcribe_treats_blank_audio_token_as_empty(tmp_path: Path) -> None:
         transcribe(
             TranscriptionRequest(
                 audio_path=audio_path,
-                profile_name="fast",
+                profile_name="small-q8_0",
                 model_dir=tmp_path,
                 whisper_binary=binary_path,
             ),
@@ -282,7 +283,7 @@ def test_transcribe_reports_whisper_failure(tmp_path: Path) -> None:
     audio_path.write_bytes(b"wav")
     binary_path = tmp_path / "whisper-cli"
     binary_path.write_text("binary", encoding="utf-8")
-    model_path("fast", tmp_path).write_text("model", encoding="utf-8")
+    model_path("small-q8_0", tmp_path).write_text("model", encoding="utf-8")
 
     def runner(_command: list[str]) -> CommandResult:
         return CommandResult(returncode=1, stdout="", stderr="bad wav")
@@ -291,7 +292,7 @@ def test_transcribe_reports_whisper_failure(tmp_path: Path) -> None:
         transcribe(
             TranscriptionRequest(
                 audio_path=audio_path,
-                profile_name="fast",
+                profile_name="small-q8_0",
                 model_dir=tmp_path,
                 whisper_binary=binary_path,
             ),

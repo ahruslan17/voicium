@@ -33,7 +33,7 @@ class ModelProfile:
 class TranscriptionRequest:
     audio_path: Path
     language: str = "auto"
-    profile_name: str = "fast"
+    profile_name: str = "small-q8_0"
     backend: str = "auto"
     model_dir: Path | None = None
     whisper_binary: Path | None = None
@@ -55,22 +55,29 @@ TRANSFORMERS_DEVICE = "auto"
 
 
 MODEL_PROFILES: dict[str, ModelProfile] = {
-    "fast": ModelProfile(
-        name="fast",
-        target="CPU / lowest latency",
+    "small-q8_0": ModelProfile(
+        name="small-q8_0",
+        target="default CPU quality/speed balance",
         source=ModelSource.WHISPER_CPP,
-        filename="ggml-tiny-q5_1.bin",
-        url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin",
+        filename="ggml-small-q8_0.bin",
+        url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q8_0.bin",
     ),
-    "balanced": ModelProfile(
-        name="balanced",
-        target="default quality/speed balance",
+    "small": ModelProfile(
+        name="small",
+        target="higher quality small model",
+        source=ModelSource.WHISPER_CPP,
+        filename="ggml-small.bin",
+        url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+    ),
+    "medium-q5_0": ModelProfile(
+        name="medium-q5_0",
+        target="higher quality balanced CPU mode",
         source=ModelSource.WHISPER_CPP,
         filename="ggml-medium-q5_0.bin",
         url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
     ),
-    "accurate": ModelProfile(
-        name="accurate",
+    "large-v3-turbo-q5_0": ModelProfile(
+        name="large-v3-turbo-q5_0",
         target="multilingual quality",
         source=ModelSource.WHISPER_CPP,
         filename="ggml-large-v3-turbo-q5_0.bin",
@@ -180,7 +187,7 @@ def build_transcribe_command(request: TranscriptionRequest) -> list[str]:
         str(request.audio_path),
         "-np",
         "-nt",
-        *fast_decode_args(profile.name),
+        *low_latency_decode_args(profile.name),
         *language_args(request.language),
     ]
 
@@ -223,8 +230,8 @@ def clean_whisper_output(output: str) -> str:
     return " ".join(text.split())
 
 
-def fast_decode_args(profile_name: str) -> list[str]:
-    if profile_name == "fast":
+def low_latency_decode_args(profile_name: str) -> list[str]:
+    if profile_name == "small-q8_0":
         return ["-nf"]
     return []
 

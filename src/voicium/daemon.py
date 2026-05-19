@@ -259,12 +259,12 @@ class DaemonService:
         try:
             RuntimeMode(runtime_mode)
         except ValueError:
-            return DaemonResponse(False, self.state, f"Unknown runtime mode: {runtime_mode}")
+            return DaemonResponse(False, self.state, f"Unknown model: {runtime_mode}")
 
         with self._lock:
             self.config = self.config.with_runtime_mode(runtime_mode)
             save_config(self.config)
-            message = f"Runtime mode set to {runtime_mode}."
+            message = f"Transcription model set to {runtime_mode}."
             self._notify_tray(DaemonState.IDLE, message)
             return DaemonResponse(True, self.state, message)
 
@@ -647,11 +647,7 @@ def _append_audio_input_devices(
 
 def _append_runtime_mode_menu(gtk: object, menu: object, config: AppConfig) -> None:
     submenu = gtk.Menu()
-    labels = {
-        RuntimeMode.QUALITY.value: "Quality - Transformers",
-        RuntimeMode.FAST.value: "Fast - whisper.cpp small",
-        RuntimeMode.BALANCED.value: "Balanced - whisper.cpp medium",
-    }
+    labels = {mode.value: mode.value for mode in RuntimeMode}
     group = None
     for runtime_mode, label in labels.items():
         item = _choice_menu_item(
@@ -666,7 +662,7 @@ def _append_runtime_mode_menu(gtk: object, menu: object, config: AppConfig) -> N
             lambda _item, selected=runtime_mode: _send_tray_command(f"set_runtime_mode:{selected}"),
         )
         submenu.append(item)
-    parent = gtk.MenuItem(label="Transcription Mode")
+    parent = gtk.MenuItem(label="Transcription Model")
     parent.set_submenu(submenu)
     menu.append(parent)
 

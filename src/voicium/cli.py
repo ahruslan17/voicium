@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     transcribe_parser.add_argument("audio_path", type=Path)
     transcribe_parser.add_argument("--lang", default="auto")
-    transcribe_parser.add_argument("--profile", default="fast")
+    transcribe_parser.add_argument("--profile", default="small-q8_0")
     transcribe_parser.add_argument("--backend", choices=("auto", "cpu", "cuda"), default="auto")
     transcribe_parser.add_argument("--model-dir", type=Path)
     transcribe_parser.add_argument("--whisper-bin", type=Path)
@@ -68,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
     record_transcribe_parser.add_argument("--device")
     record_transcribe_parser.add_argument("--keep-audio", type=Path)
     record_transcribe_parser.add_argument("--lang", default="auto")
-    record_transcribe_parser.add_argument("--profile", default="fast")
+    record_transcribe_parser.add_argument("--profile", default="small-q8_0")
     record_transcribe_parser.add_argument(
         "--backend",
         choices=("auto", "cpu", "cuda"),
@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     models_download_parser.add_argument(
         "profile",
-        choices=("fast", "balanced", "accurate", "russian"),
+        choices=("small-q8_0", "small", "medium-q5_0", "large-v3-turbo-q5_0", "russian"),
     )
     models_download_parser.add_argument("--model-dir", type=Path)
     models_download_parser.set_defaults(handler=download_model_command)

@@ -83,8 +83,9 @@ class PasteManager:
             log_timing("paste.total", total_started_at)
             return PasteResult(PasteMode.COPIED, "Text copied to clipboard; press Ctrl+V to paste.")
 
+        paste_command = self._paste_command(backend)
         paste_started_at = time.perf_counter()
-        paste_result = self.command_runner(backend.paste_command, None)
+        paste_result = self.command_runner(paste_command, None)
         log_timing("paste.auto_paste", paste_started_at)
         if paste_result.returncode != 0:
             details = paste_result.stderr or paste_result.stdout or "paste command failed"
@@ -107,6 +108,18 @@ class PasteManager:
         if result.returncode != 0:
             return None
         return result.stdout
+
+    def _paste_command(self, backend: PasteBackend) -> tuple[str, ...]:
+        is_x11_paste = backend.paste_command == ("xdotool", "key", "ctrl+v")
+        if is_x11_paste and self._focused_x11_app_is_terminal():
+            return ("xdotool", "key", "ctrl+shift+v")
+        return backend.paste_command or ()
+
+    def _focused_x11_app_is_terminal(self) -> bool:
+        result = self.command_runner(("xdotool", "getactivewindow", "getwindowclassname"), None)
+        if result.returncode != 0:
+            return False
+        return is_terminal_window_class(result.stdout)
 
 
 def insert_or_copy(
@@ -206,6 +219,28 @@ def notify_paste_result(
         return
     runner = command_runner or run_command
     runner(("notify-send", "Voicium", result.message), None)
+
+
+def is_terminal_window_class(window_class: str) -> bool:
+    normalized = window_class.strip().lower()
+    terminal_classes = {
+        "alacritty",
+        "foot",
+        "gnome-terminal",
+        "kitty",
+        "konsole",
+        "kgx",
+        "org.gnome.console",
+        "org.gnome.terminal",
+        "st",
+        "terminator",
+        "tilix",
+        "urxvt",
+        "wezterm",
+        "xfce4-terminal",
+        "xterm",
+    }
+    return normalized in terminal_classes or normalized.endswith("terminal")
 
 
 def run_command(args: Sequence[str], input_text: str | None) -> CommandResult:

@@ -162,7 +162,7 @@ def test_daemon_status_includes_hotkey_and_runtime_mode() -> None:
     response = DaemonService(config=AppConfig.default()).status()
 
     assert "hotkey=KEY_RIGHTCTRL" in response.message
-    assert "runtime_mode=fast" in response.message
+    assert "runtime_mode=small-q8_0" in response.message
 
 
 def test_daemon_updates_runtime_mode_and_hotkey(tmp_path: Path, monkeypatch) -> None:
@@ -170,12 +170,12 @@ def test_daemon_updates_runtime_mode_and_hotkey(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr("voicium.config.default_config_path", lambda: config_path)
     service = DaemonService(config=AppConfig.default())
 
-    mode_response = service.handle_command("set_runtime_mode:fast")
+    mode_response = service.handle_command("set_runtime_mode:small-q8_0")
     hotkey_response = service.handle_command("set_hotkey:KEY_F8")
 
     assert mode_response.ok is True
     assert hotkey_response.ok is True
-    assert service.config.transcription.model_profile == "fast"
+    assert service.config.transcription.model_profile == "small-q8_0"
     assert service.config.hotkey.key == "KEY_F8"
     assert config_path.exists()
 
@@ -263,7 +263,7 @@ def test_daemon_reloads_config(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "config.toml"
     monkeypatch.setattr("voicium.config.default_config_path", lambda: config_path)
     save_config(
-        AppConfig.default().with_hotkey("KEY_F8").with_runtime_mode("balanced"), config_path
+        AppConfig.default().with_hotkey("KEY_F8").with_runtime_mode("medium-q5_0"), config_path
     )
     service = DaemonService(config=AppConfig.default())
 
@@ -271,7 +271,7 @@ def test_daemon_reloads_config(tmp_path: Path, monkeypatch) -> None:
 
     assert response.ok is True
     assert service.config.hotkey.key == "KEY_F8"
-    assert service.config.transcription.model_profile == "balanced"
+    assert service.config.transcription.model_profile == "medium-q5_0"
 
 
 def test_daemon_uses_saved_settings_before_transcription(tmp_path: Path) -> None:
@@ -300,12 +300,12 @@ def test_daemon_uses_saved_settings_before_transcription(tmp_path: Path) -> None
         history_writer=lambda _text, _raw, _result: None,
     )
 
-    current_config = AppConfig.default().with_runtime_mode("balanced")
+    current_config = AppConfig.default().with_runtime_mode("medium-q5_0")
     service.handle_command(DaemonCommand.START_RECORDING.value)
     service.handle_command(DaemonCommand.STOP_RECORDING.value)
     _wait_for_state(service, DaemonState.IDLE)
 
-    assert requests[0].profile_name == "balanced"
+    assert requests[0].profile_name == "medium-q5_0"
 
 
 def test_daemon_returns_error_when_paste_fails(tmp_path: Path) -> None:
@@ -346,12 +346,12 @@ def test_daemon_falls_back_to_quality_when_whisper_cpp_binary_is_missing(
 
     def transcriber(request: TranscriptionRequest) -> str:
         requests.append(request)
-        if request.profile_name == "fast":
+        if request.profile_name == "small-q8_0":
             raise TranscriptionError("whisper.cpp binary not found")
         return "fallback transcript"
 
     service = DaemonService(
-        config=AppConfig.default().with_runtime_mode("fast"),
+        config=AppConfig.default().with_runtime_mode("small-q8_0"),
         recorder_factory=recorder_factory,
         transcriber=transcriber,
         paste_inserter=lambda _text: PasteResult(PasteMode.COPIED, "copied"),
@@ -364,13 +364,13 @@ def test_daemon_falls_back_to_quality_when_whisper_cpp_binary_is_missing(
 
     assert response.ok is True
     assert service.last_transcript == "fallback transcript"
-    assert [request.profile_name for request in requests] == ["fast", "russian"]
+    assert [request.profile_name for request in requests] == ["small-q8_0", "russian"]
 
 
 def test_fallback_to_quality_only_for_missing_whisper_cpp_binary() -> None:
-    assert should_fallback_to_quality("whisper.cpp binary not found", "fast") is True
+    assert should_fallback_to_quality("whisper.cpp binary not found", "small-q8_0") is True
     assert should_fallback_to_quality("whisper.cpp binary not found", "russian") is False
-    assert should_fallback_to_quality("other", "fast") is False
+    assert should_fallback_to_quality("other", "small-q8_0") is False
 
 
 def test_daemon_socket_status(tmp_path: Path) -> None:
@@ -598,16 +598,17 @@ def test_append_hotkey_menu_marks_selected_key() -> None:
 
 def test_append_runtime_mode_menu_marks_selected_mode() -> None:
     menu = FakeGtk.Menu()
-    _append_runtime_mode_menu(FakeGtk, menu, AppConfig.default().with_runtime_mode("balanced"))
+    _append_runtime_mode_menu(FakeGtk, menu, AppConfig.default().with_runtime_mode("medium-q5_0"))
 
     submenu = menu.items[0].submenu
 
     assert [item.label for item in submenu.items] == [
-        "Quality - Transformers",
-        "Fast - whisper.cpp small",
-        "Balanced - whisper.cpp medium",
+        "small-q8_0",
+        "small",
+        "medium-q5_0",
+        "large-v3-turbo-q5_0",
     ]
-    assert [item.active for item in submenu.items] == [False, False, True]
+    assert [item.active for item in submenu.items] == [False, False, True, False]
 
 
 def test_append_paste_menu_marks_auto_paste_state(monkeypatch) -> None:

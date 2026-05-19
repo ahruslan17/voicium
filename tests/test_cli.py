@@ -36,7 +36,7 @@ def test_transcribe_command_reports_missing_file(capsys) -> None:
     assert "Audio file not found" in captured.out
 
 
-def test_transcribe_command_defaults_to_fast_profile(capsys, monkeypatch) -> None:
+def test_transcribe_command_defaults_to_small_q8_profile(capsys, monkeypatch) -> None:
     def fake_transcribe(request) -> str:
         raise TranscriptionError(f"profile={request.profile_name}")
 
@@ -47,7 +47,7 @@ def test_transcribe_command_defaults_to_fast_profile(capsys, monkeypatch) -> Non
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "profile=fast" in captured.out
+    assert "profile=small-q8_0" in captured.out
 
 
 def test_record_command_reports_invalid_duration(capsys, tmp_path) -> None:

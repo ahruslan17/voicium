@@ -118,9 +118,9 @@ for line in lines:
             if not seen_backend:
                 result.append('backend = "auto"')
             if not seen_model_profile:
-                result.append('model_profile = "fast"')
+                result.append('model_profile = "small-q8_0"')
             if not seen_runtime_mode:
-                result.append('runtime_mode = "fast"')
+                result.append('runtime_mode = "small-q8_0"')
         in_transcription = stripped == "[transcription]"
         seen_backend = False
         seen_model_profile = False
@@ -133,11 +133,11 @@ for line in lines:
         seen_backend = True
         continue
     if in_transcription and stripped.startswith("model_profile"):
-        result.append('model_profile = "fast"')
+        result.append('model_profile = "small-q8_0"')
         seen_model_profile = True
         continue
     if in_transcription and stripped.startswith("runtime_mode"):
-        result.append('runtime_mode = "fast"')
+        result.append('runtime_mode = "small-q8_0"')
         seen_runtime_mode = True
         continue
 
@@ -147,9 +147,9 @@ if in_transcription:
     if not seen_backend:
         result.append('backend = "auto"')
     if not seen_model_profile:
-        result.append('model_profile = "fast"')
+        result.append('model_profile = "small-q8_0"')
     if not seen_runtime_mode:
-        result.append('runtime_mode = "fast"')
+        result.append('runtime_mode = "small-q8_0"')
 
 config_path.write_text("\n".join(result) + "\n", encoding="utf-8")
 PY

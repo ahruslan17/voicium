@@ -9,9 +9,10 @@ from types import MappingProxyType
 
 
 class RuntimeMode(StrEnum):
-    QUALITY = "quality"
-    FAST = "fast"
-    BALANCED = "balanced"
+    SMALL_Q8_0 = "small-q8_0"
+    SMALL = "small"
+    MEDIUM_Q5_0 = "medium-q5_0"
+    LARGE_V3_TURBO_Q5_0 = "large-v3-turbo-q5_0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,8 +37,8 @@ class AudioConfig:
 @dataclass(frozen=True, slots=True)
 class TranscriptionConfig:
     backend: str = "auto"
-    model_profile: str = "fast"
-    runtime_mode: str = RuntimeMode.FAST.value
+    model_profile: str = RuntimeMode.SMALL_Q8_0.value
+    runtime_mode: str = RuntimeMode.SMALL_Q8_0.value
     preload_model: bool = True
 
 
@@ -144,25 +145,24 @@ def transcription_for_runtime_mode(
     runtime_mode: str,
     backend: str = "auto",
 ) -> TranscriptionConfig:
-    match RuntimeMode(runtime_mode):
-        case RuntimeMode.QUALITY:
-            return TranscriptionConfig(
-                backend="auto",
-                model_profile="accurate",
-                runtime_mode=RuntimeMode.QUALITY.value,
-            )
-        case RuntimeMode.FAST:
-            return TranscriptionConfig(
-                backend=backend,
-                model_profile="fast",
-                runtime_mode=RuntimeMode.FAST.value,
-            )
-        case RuntimeMode.BALANCED:
-            return TranscriptionConfig(
-                backend=backend,
-                model_profile="balanced",
-                runtime_mode=RuntimeMode.BALANCED.value,
-            )
+    selected_mode = normalize_runtime_mode(runtime_mode)
+    mode = RuntimeMode(selected_mode)
+    selected_backend = "auto" if mode == RuntimeMode.LARGE_V3_TURBO_Q5_0 else backend
+    return TranscriptionConfig(
+        backend=selected_backend,
+        model_profile=mode.value,
+        runtime_mode=mode.value,
+    )
+
+
+def normalize_runtime_mode(runtime_mode: str) -> str:
+    legacy_modes = {
+        "fast": RuntimeMode.SMALL_Q8_0.value,
+        "balanced": RuntimeMode.MEDIUM_Q5_0.value,
+        "quality": RuntimeMode.LARGE_V3_TURBO_Q5_0.value,
+        "accurate": RuntimeMode.LARGE_V3_TURBO_Q5_0.value,
+    }
+    return legacy_modes.get(runtime_mode, runtime_mode)
 
 
 def load_config(path: Path | None = None) -> AppConfig:
